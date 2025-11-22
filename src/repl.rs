@@ -5,7 +5,7 @@ use std::panic;
 pub struct Repl {
     compiler: Compiler,
     vm: VM,
-    input_buffer: String,
+    pub input_buffer: String,
 }
 
 impl Repl {
@@ -68,7 +68,7 @@ impl Repl {
         println!("Goodbye!");
     }
 
-    fn is_complete_input(&self) -> bool {
+    pub fn is_complete_input(&self) -> bool {
         let mut depth = 0;
         let mut in_string = false;
         let mut chars = self.input_buffer.chars().peekable();
@@ -152,7 +152,7 @@ impl Repl {
         }
     }
 
-    fn format_value(&self, value: &Value) -> String {
+    pub fn format_value(&self, value: &Value) -> String {
         match value {
             Value::Integer(n) => n.to_string(),
             Value::Boolean(b) => b.to_string(),
@@ -223,7 +223,7 @@ impl Repl {
         }
     }
 
-    fn clear_state(&mut self) {
+    pub fn clear_state(&mut self) {
         self.compiler = Compiler::new();
         self.vm = VM::new();
         self.input_buffer.clear();
