@@ -23,6 +23,30 @@ enum Instruction {
     Halt,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+enum LispExpr {
+    Number(i64),
+    Boolean(bool),
+    Symbol(String),
+    List(Vec<LispExpr>),
+}
+
+fn number(n: i64) -> LispExpr {
+    LispExpr::Number(n)
+}
+
+fn boolean(b: bool) -> LispExpr {
+    LispExpr::Boolean(b)
+}
+
+fn symbol(s: &str) -> LispExpr {
+    LispExpr::Symbol(s.to_string())
+}
+
+fn list(items: Vec<LispExpr>) -> LispExpr {
+    LispExpr::List(items)
+}
+
 #[derive(Debug)]
 struct Frame {
     return_address: usize,
@@ -173,9 +197,9 @@ impl VM {
                 self.call_stack.push(frame);
 
                 // Save current bytecode and switch to function bytecode
-                // Note: In a full implementation, need to save and restore current_bytecode
+                // @TODO: in a full implementation, need to save and restore current_bytecode
                 self.instruction_pointer = 0;
-                // This is just a simplification, in reality would need to handle
+                // this is a simplification, will need to handle
                 // switching between different bytecode sequences
             }
             Instruction::Halt => {
@@ -191,7 +215,112 @@ impl VM {
     }
 }
 
+struct Compiler {
+    bytecode: Vec<Instruction>,
+    functions: HashMap<String, Vec<Instruction>>,
+    instruction_address: usize,
+}
+
+impl Compiler {
+    fn new() -> Self {
+        Compiler {
+            bytecode: Vec::new(),
+            functions: HashMap::new(),
+            instruction_address: 0,
+        }
+    }
+
+    fn emit(&mut self, instruction: Instruction) {
+        self.bytecode.push(instruction);
+        self.instruction_address += 1;
+    }
+
+    // Returns the starting address of compiled bytecode
+    fn compile_expr(&mut self, expr: &LispExpr) -> usize {
+        let start_address = self.instruction_address;
+
+        match expr {
+            // Case: Number or Boolean - emit Push instruction
+            LispExpr::Number(n) => {
+                self.emit(Instruction::Push(Value::Integer(*n)));
+            }
+            LispExpr::Boolean(b) => {
+                self.emit(Instruction::Push(Value::Boolean(*b)));
+            }
+
+            // Case: Symbol - WIP: error for now
+            LispExpr::Symbol(s) => {
+                panic!("Symbol '{}' not supported in this context yet", s);
+            }
+
+            // Case: List (func call or special form)
+            LispExpr::List(items) => {
+                if items.is_empty() {
+                    panic!("Empty list cannot be compiled");
+                }
+
+                // Extract operator (first element should be a Symbol)
+                let operator = match &items[0] {
+                    LispExpr::Symbol(s) => s.as_str(),
+                    _ => panic!("First element of list must be a symbol (operator)"),
+                };
+
+                match operator {
+                    // Arithmetic operators
+                    "+" => {
+                        if items.len() != 3 {
+                            panic!("+ expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Add);
+                    }
+                    "-" => {
+                        if items.len() != 3 {
+                            panic!("- expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Sub);
+                    }
+                    "*" => {
+                        if items.len() != 3 {
+                            panic!("* expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Mul);
+                    }
+                    "/" => {
+                        if items.len() != 3 {
+                            panic!("/ expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Div);
+                    }
+
+                    // Comparison operator
+                    "<=" => {
+                        if items.len() != 3 {
+                            panic!("<= expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Leq);
+                    }
+
+                    _ => panic!("Operator '{}' not yet implemented", operator),
+                }
+            }
+        }
+
+        start_address
+    }
+}
+
 fn main() {
+    println!("=== Phase 1: VM Test ===");
     let mut vm = VM::new();
 
     // Hardcoded bytecode: [Push(5), Push(3), Add, Print, Halt]
@@ -204,4 +333,117 @@ fn main() {
     ];
 
     vm.run();
+
+    println!("\n=== Phase 2: LispExpr Construction Test ===");
+
+    // Example: (+ 5 3)
+    let simple_add = list(vec![
+        symbol("+"),
+        number(5),
+        number(3),
+    ]);
+    println!("Simple addition: {:?}", simple_add);
+
+    // Example: (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2))))
+    // Testing how to construct a more complex expression with recursion like Fibonacci
+    let fib_body = list(vec![
+        symbol("if"),
+        list(vec![
+            symbol("<="),
+            symbol("n"),
+            number(1),
+        ]),
+        symbol("n"),
+        list(vec![
+            symbol("+"),
+            list(vec![
+                symbol("fib"),
+                list(vec![
+                    symbol("-"),
+                    symbol("n"),
+                    number(1),
+                ]),
+            ]),
+            list(vec![
+                symbol("fib"),
+                list(vec![
+                    symbol("-"),
+                    symbol("n"),
+                    number(2),
+                ]),
+            ]),
+        ]),
+    ]);
+    println!("\nFibonacci body: {:?}", fib_body);
+
+    // Example: (defun fib (n) ...)
+    let fib_defun = list(vec![
+        symbol("defun"),
+        symbol("fib"),
+        list(vec![symbol("n")]),
+        fib_body,
+    ]);
+    println!("\nFibonacci defun: {:?}", fib_defun);
+
+    // Example: (fib 10)
+    let fib_call = list(vec![
+        symbol("fib"),
+        number(10),
+    ]);
+    println!("\nFibonacci call: {:?}", fib_call);
+
+    println!("\n=== Basic Compilation Test ===");
+
+    // Test 1: Compile and run (+ 5 3)
+    let mut compiler = Compiler::new();
+    let expr = list(vec![symbol("+"), number(5), number(3)]);
+    println!("\nCompiling: {:?}", expr);
+    compiler.compile_expr(&expr);
+    compiler.emit(Instruction::Print);
+    compiler.emit(Instruction::Halt);
+
+    println!("Generated bytecode:");
+    for (i, instr) in compiler.bytecode.iter().enumerate() {
+        println!("  {}: {:?}", i, instr);
+    }
+
+    let mut vm = VM::new();
+    vm.current_bytecode = compiler.bytecode;
+    print!("Output: ");
+    vm.run();
+
+    // Test 2: Compile and run (* (- 10 2) (+ 3 2))
+    let mut compiler2 = Compiler::new();
+    let expr2 = list(vec![
+        symbol("*"),
+        list(vec![symbol("-"), number(10), number(2)]),
+        list(vec![symbol("+"), number(3), number(2)]),
+    ]);
+    println!("\nCompiling: {:?}", expr2);
+    compiler2.compile_expr(&expr2);
+    compiler2.emit(Instruction::Print);
+    compiler2.emit(Instruction::Halt);
+
+    println!("Generated bytecode:");
+    for (i, instr) in compiler2.bytecode.iter().enumerate() {
+        println!("  {}: {:?}", i, instr);
+    }
+
+    let mut vm2 = VM::new();
+    vm2.current_bytecode = compiler2.bytecode;
+    print!("Output: ");
+    vm2.run();
+
+    // Test 3: Compile and run (<= 5 10)
+    let mut compiler3 = Compiler::new();
+    let expr3 = list(vec![symbol("<="), number(5), number(10)]);
+    println!("\nCompiling: {:?}", expr3);
+    compiler3.compile_expr(&expr3);
+    compiler3.emit(Instruction::Print);
+    compiler3.emit(Instruction::Halt);
+
+    let mut vm3 = VM::new();
+    vm3.current_bytecode = compiler3.bytecode;
+    print!("Output: ");
+    vm3.run();
 }
