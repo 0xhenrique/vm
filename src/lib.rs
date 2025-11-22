@@ -16,7 +16,14 @@ pub enum Instruction {
     Sub,
     Mul,
     Div,
+    Mod,
+    Neg,
     Leq,
+    Lt,
+    Gt,
+    Gte,
+    Eq,
+    Neq,
     JmpIfFalse(usize),
     Jmp(usize),
     Call(String, usize),
@@ -25,7 +32,6 @@ pub enum Instruction {
     Print,
     Halt,
 }
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LispExpr {
@@ -143,6 +149,30 @@ impl VM {
                 }
                 self.instruction_pointer += 1;
             }
+            Instruction::Mod => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        if y == 0 {
+                            panic!("Modulo by zero");
+                        }
+                        self.value_stack.push(Value::Integer(x % y));
+                    }
+                    _ => panic!("Type error: Mod expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Neg => {
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match a {
+                    Value::Integer(x) => {
+                        self.value_stack.push(Value::Integer(-x));
+                    }
+                    _ => panic!("Type error: Neg expects integer"),
+                }
+                self.instruction_pointer += 1;
+            }
             Instruction::Leq => {
                 let b = self.value_stack.pop().expect("Stack underflow");
                 let a = self.value_stack.pop().expect("Stack underflow");
@@ -151,6 +181,61 @@ impl VM {
                         self.value_stack.push(Value::Boolean(x <= y));
                     }
                     _ => panic!("Type error: Leq expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Lt => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(x < y));
+                    }
+                    _ => panic!("Type error: Lt expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Gt => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(x > y));
+                    }
+                    _ => panic!("Type error: Gt expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Gte => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(x >= y));
+                    }
+                    _ => panic!("Type error: Gte expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Eq => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(x == y));
+                    }
+                    _ => panic!("Type error: Eq expects integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Neq => {
+                let b = self.value_stack.pop().expect("Stack underflow");
+                let a = self.value_stack.pop().expect("Stack underflow");
+                match (a, b) {
+                    (Value::Integer(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(x != y));
+                    }
+                    _ => panic!("Type error: Neq expects integers"),
                 }
                 self.instruction_pointer += 1;
             }
@@ -252,7 +337,7 @@ impl Compiler {
         let start_address = self.instruction_address;
 
         match expr {
-            // Case: Number or Boolean
+            // Case: Number or Boolean - emit Push instruction
             LispExpr::Number(n) => {
                 self.emit(Instruction::Push(Value::Integer(*n)));
             }
@@ -260,7 +345,7 @@ impl Compiler {
                 self.emit(Instruction::Push(Value::Boolean(*b)));
             }
 
-            // Case: Symbol
+            // Case: Symbol - check if it's a parameter
             LispExpr::Symbol(s) => {
                 // Check if this symbol is a parameter
                 if let Some(idx) = self.param_names.iter().position(|p| p == s) {
@@ -270,7 +355,7 @@ impl Compiler {
                 }
             }
 
-            // Case: List (func call or special form)
+            // Case: List (function call or special form)
             LispExpr::List(items) => {
                 if items.is_empty() {
                     panic!("Empty list cannot be compiled");
@@ -316,8 +401,23 @@ impl Compiler {
                         self.compile_expr(&items[2]);
                         self.emit(Instruction::Div);
                     }
+                    "%" => {
+                        if items.len() != 3 {
+                            panic!("% expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Mod);
+                    }
+                    "neg" => {
+                        if items.len() != 2 {
+                            panic!("neg expects exactly 1 argument");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.emit(Instruction::Neg);
+                    }
 
-                    // Comparison operator
+                    // Comparison operators
                     "<=" => {
                         if items.len() != 3 {
                             panic!("<= expects exactly 2 arguments");
@@ -325,6 +425,46 @@ impl Compiler {
                         self.compile_expr(&items[1]);
                         self.compile_expr(&items[2]);
                         self.emit(Instruction::Leq);
+                    }
+                    "<" => {
+                        if items.len() != 3 {
+                            panic!("< expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Lt);
+                    }
+                    ">" => {
+                        if items.len() != 3 {
+                            panic!("> expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Gt);
+                    }
+                    ">=" => {
+                        if items.len() != 3 {
+                            panic!(">= expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Gte);
+                    }
+                    "==" => {
+                        if items.len() != 3 {
+                            panic!("== expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Eq);
+                    }
+                    "!=" => {
+                        if items.len() != 3 {
+                            panic!("!= expects exactly 2 arguments");
+                        }
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
+                        self.emit(Instruction::Neq);
                     }
 
                     // Conditional: (if condition then-branch else-branch)
@@ -400,16 +540,19 @@ impl Compiler {
             panic!("defun expects 4 elements: (defun name (params) body)");
         }
 
+        // Check first element is "defun"
         match &items[0] {
             LispExpr::Symbol(s) if s == "defun" => {}
             _ => panic!("First element must be 'defun'"),
         }
 
+        // Extract function name
         let fn_name = match &items[1] {
             LispExpr::Symbol(s) => s.clone(),
             _ => panic!("Function name must be a symbol"),
         };
 
+        // Extract parameters
         let params = match &items[2] {
             LispExpr::List(p) => p,
             _ => panic!("Parameters must be a list"),

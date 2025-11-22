@@ -159,6 +159,13 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         }
         Instruction::Print => bytes.push(11),
         Instruction::Halt => bytes.push(12),
+        Instruction::Mod => bytes.push(13),
+        Instruction::Neg => bytes.push(14),
+        Instruction::Lt => bytes.push(15),
+        Instruction::Gt => bytes.push(16),
+        Instruction::Gte => bytes.push(17),
+        Instruction::Eq => bytes.push(18),
+        Instruction::Neq => bytes.push(19),
     }
 }
 
@@ -187,6 +194,13 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         10 => Ok(Instruction::LoadArg(read_u32(bytes, pos)? as usize)),
         11 => Ok(Instruction::Print),
         12 => Ok(Instruction::Halt),
+        13 => Ok(Instruction::Mod),
+        14 => Ok(Instruction::Neg),
+        15 => Ok(Instruction::Lt),
+        16 => Ok(Instruction::Gt),
+        17 => Ok(Instruction::Gte),
+        18 => Ok(Instruction::Eq),
+        19 => Ok(Instruction::Neq),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
