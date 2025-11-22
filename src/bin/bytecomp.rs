@@ -38,7 +38,7 @@ fn main() {
     };
 
     // Parse the source code
-    let mut parser = Parser::new(&source);
+    let mut parser = Parser::new_with_file(&source, input_file.clone());
     let exprs = match parser.parse_all() {
         Ok(e) => e,
         Err(msg) => {
@@ -49,7 +49,21 @@ fn main() {
 
     // Compile to bytecode
     let mut compiler = Compiler::new();
-    let (functions, main_bytecode) = compiler.compile_program(&exprs);
+    let (functions, main_bytecode) = match compiler.compile_program(&exprs) {
+        Ok((f, m)) => (f, m),
+        Err(compile_error) => {
+            // Extract source line for context
+            let source_lines: Vec<&str> = source.lines().collect();
+            let source_line = if compile_error.location.line > 0 && compile_error.location.line <= source_lines.len() {
+                Some(source_lines[compile_error.location.line - 1])
+            } else {
+                None
+            };
+
+            eprintln!("{}", compile_error.format(source_line));
+            std::process::exit(1);
+        }
+    };
 
     // Save bytecode to file
     if let Err(e) = bytecode::save_bytecode_file(&output_file, &functions, &main_bytecode) {

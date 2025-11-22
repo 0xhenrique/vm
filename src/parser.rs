@@ -1,17 +1,29 @@
-use crate::LispExpr;
+use crate::{LispExpr, Location, SourceExpr};
+
+#[derive(Debug, Clone)]
+struct Token {
+    text: String,
+    line: usize,
+    column: usize,
+}
 
 pub struct Parser {
-    tokens: Vec<String>,
+    tokens: Vec<Token>,
     pos: usize,
+    file: String,
 }
 
 impl Parser {
     pub fn new(input: &str) -> Self {
-        let tokens = tokenize(input);
-        Parser { tokens, pos: 0 }
+        Self::new_with_file(input, "<input>".to_string())
     }
 
-    pub fn parse_all(&mut self) -> Result<Vec<LispExpr>, String> {
+    pub fn new_with_file(input: &str, file: String) -> Self {
+        let tokens = tokenize(input);
+        Parser { tokens, pos: 0, file }
+    }
+
+    pub fn parse_all(&mut self) -> Result<Vec<SourceExpr>, String> {
         let mut exprs = Vec::new();
         while self.pos < self.tokens.len() {
             exprs.push(self.parse_expr()?);
@@ -19,41 +31,46 @@ impl Parser {
         Ok(exprs)
     }
 
-    fn parse_expr(&mut self) -> Result<LispExpr, String> {
+    fn parse_expr(&mut self) -> Result<SourceExpr, String> {
         if self.pos >= self.tokens.len() {
             return Err("Unexpected end of input".to_string());
         }
 
         let token = &self.tokens[self.pos];
+        let location = Location::new(token.line, token.column, self.file.clone());
 
-        if token == "(" {
+        if token.text == "(" {
             self.parse_list()
-        } else if token == ")" {
+        } else if token.text == ")" {
             Err("Unexpected closing parenthesis".to_string())
-        } else if token == "true" {
+        } else if token.text == "true" {
             self.pos += 1;
-            Ok(LispExpr::Boolean(true))
-        } else if token == "false" {
+            Ok(SourceExpr::new(LispExpr::Boolean(true), location))
+        } else if token.text == "false" {
             self.pos += 1;
-            Ok(LispExpr::Boolean(false))
-        } else if let Ok(n) = token.parse::<i64>() {
+            Ok(SourceExpr::new(LispExpr::Boolean(false), location))
+        } else if let Ok(n) = token.text.parse::<i64>() {
             self.pos += 1;
-            Ok(LispExpr::Number(n))
+            Ok(SourceExpr::new(LispExpr::Number(n), location))
         } else {
+            let symbol = token.text.clone();
             self.pos += 1;
-            Ok(LispExpr::Symbol(token.clone()))
+            Ok(SourceExpr::new(LispExpr::Symbol(symbol), location))
         }
     }
 
-    fn parse_list(&mut self) -> Result<LispExpr, String> {
+    fn parse_list(&mut self) -> Result<SourceExpr, String> {
+        let start_token = &self.tokens[self.pos];
+        let location = Location::new(start_token.line, start_token.column, self.file.clone());
+
         self.pos += 1; // consume '('
 
         let mut items = Vec::new();
 
         while self.pos < self.tokens.len() {
-            if &self.tokens[self.pos] == ")" {
+            if self.tokens[self.pos].text == ")" {
                 self.pos += 1; // consume ')'
-                return Ok(LispExpr::List(items));
+                return Ok(SourceExpr::new(LispExpr::List(items), location));
             }
 
             items.push(self.parse_expr()?);
@@ -63,33 +80,73 @@ impl Parser {
     }
 }
 
-fn tokenize(input: &str) -> Vec<String> {
+fn tokenize(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut current = String::new();
+    let mut line = 1;
+    let mut column = 1;
+    let mut token_start_column = 1;
 
     for ch in input.chars() {
         match ch {
             '(' | ')' => {
                 if !current.is_empty() {
-                    tokens.push(current.clone());
+                    tokens.push(Token {
+                        text: current.clone(),
+                        line,
+                        column: token_start_column,
+                    });
                     current.clear();
                 }
-                tokens.push(ch.to_string());
+                tokens.push(Token {
+                    text: ch.to_string(),
+                    line,
+                    column,
+                });
+                column += 1;
+                token_start_column = column;
             }
-            ' ' | '\n' | '\t' | '\r' => {
+            '\n' => {
                 if !current.is_empty() {
-                    tokens.push(current.clone());
+                    tokens.push(Token {
+                        text: current.clone(),
+                        line,
+                        column: token_start_column,
+                    });
                     current.clear();
                 }
+                line += 1;
+                column = 1;
+                token_start_column = 1;
+            }
+            ' ' | '\t' | '\r' => {
+                if !current.is_empty() {
+                    tokens.push(Token {
+                        text: current.clone(),
+                        line,
+                        column: token_start_column,
+                    });
+                    current.clear();
+                }
+                column += 1;
+                token_start_column = column;
             }
             _ => {
+                if current.is_empty() {
+                    token_start_column = column;
+                }
                 current.push(ch);
+                column += 1;
             }
         }
     }
 
     if !current.is_empty() {
-        tokens.push(current);
+        tokens.push(Token {
+            text: current,
+            line,
+            column: token_start_column,
+        });
     }
 
     tokens
