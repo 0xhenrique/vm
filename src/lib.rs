@@ -3,7 +3,6 @@ use std::collections::HashMap;
 pub mod parser;
 pub mod bytecode;
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
@@ -35,133 +34,31 @@ pub enum Instruction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Location {
-    pub line: usize,
-    pub column: usize,
-    pub file: String,
-}
-
-impl Location {
-    pub fn new(line: usize, column: usize, file: String) -> Self {
-        Location { line, column, file }
-    }
-
-    pub fn unknown() -> Self {
-        Location {
-            line: 0,
-            column: 0,
-            file: "<unknown>".to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum LispExpr {
     Number(i64),
     Boolean(bool),
     Symbol(String),
-    List(Vec<SourceExpr>),
-}
-
-// Wrapper that includes source location
-#[derive(Debug, Clone, PartialEq)]
-pub struct SourceExpr {
-    pub expr: LispExpr,
-    pub location: Location,
-}
-
-impl SourceExpr {
-    pub fn new(expr: LispExpr, location: Location) -> Self {
-        SourceExpr { expr, location }
-    }
-
-    pub fn unknown(expr: LispExpr) -> Self {
-        SourceExpr {
-            expr,
-            location: Location::unknown(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CompileError {
-    pub message: String,
-    pub location: Location,
-}
-
-impl CompileError {
-    pub fn new(message: String, location: Location) -> Self {
-        CompileError { message, location }
-    }
-
-    pub fn format(&self, source_line: Option<&str>) -> String {
-        let mut output = format!(
-            "Compile error at {}:{}:{}\n  {}\n",
-            self.location.file, self.location.line, self.location.column, self.message
-        );
-
-        if let Some(line) = source_line {
-            output.push_str(&format!("\n  | {}\n", line));
-            output.push_str(&format!("  | {}^\n", " ".repeat(self.location.column.saturating_sub(1))));
-        }
-
-        output
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeError {
-    pub message: String,
-    pub call_stack: Vec<String>,
-}
-
-impl RuntimeError {
-    pub fn new(message: String) -> Self {
-        RuntimeError {
-            message,
-            call_stack: Vec::new(),
-        }
-    }
-
-    pub fn with_stack(message: String, call_stack: Vec<String>) -> Self {
-        RuntimeError {
-            message,
-            call_stack,
-        }
-    }
-
-    pub fn format(&self) -> String {
-        let mut output = format!("Runtime error: {}\n", self.message);
-
-        if !self.call_stack.is_empty() {
-            output.push_str("\nCall stack:\n");
-            for (i, frame) in self.call_stack.iter().rev().enumerate() {
-                output.push_str(&format!("  #{}: {}\n", i, frame));
-            }
-        }
-
-        output
-    }
+    List(Vec<LispExpr>),
 }
 
 #[allow(dead_code)]
-fn number(n: i64) -> SourceExpr {
-    SourceExpr::unknown(LispExpr::Number(n))
+fn number(n: i64) -> LispExpr {
+    LispExpr::Number(n)
 }
 
 #[allow(dead_code)]
-fn boolean(b: bool) -> SourceExpr {
-    SourceExpr::unknown(LispExpr::Boolean(b))
+fn boolean(b: bool) -> LispExpr {
+    LispExpr::Boolean(b)
 }
 
 #[allow(dead_code)]
-fn symbol(s: &str) -> SourceExpr {
-    SourceExpr::unknown(LispExpr::Symbol(s.to_string()))
+fn symbol(s: &str) -> LispExpr {
+    LispExpr::Symbol(s.to_string())
 }
 
 #[allow(dead_code)]
-fn list(items: Vec<SourceExpr>) -> SourceExpr {
-    SourceExpr::unknown(LispExpr::List(items))
+fn list(items: Vec<LispExpr>) -> LispExpr {
+    LispExpr::List(items)
 }
 
 #[derive(Debug)]
@@ -169,7 +66,6 @@ pub struct Frame {
     pub return_address: usize,
     pub locals: Vec<Value>,
     pub return_bytecode: Vec<Instruction>, // Bytecode to return to after function call
-    pub function_name: String, // For stack traces
 }
 
 pub struct VM {
@@ -182,7 +78,6 @@ pub struct VM {
 }
 
 impl VM {
-
     pub fn new() -> Self {
         VM {
             instruction_pointer: 0,
@@ -193,7 +88,6 @@ impl VM {
             halted: false,
         }
     }
-
 
     fn execute_one_instruction(&mut self) {
         if self.instruction_pointer >= self.current_bytecode.len() {
@@ -391,12 +285,11 @@ impl VM {
                 }
                 args.reverse();
 
-                // Create new frame with return bytecode and function name for stack traces
+                // Create new frame with return bytecode
                 let frame = Frame {
                     return_address: self.instruction_pointer + 1,
                     locals: args,
                     return_bytecode: self.current_bytecode.clone(),
-                    function_name: fn_name.clone(),
                 };
                 self.call_stack.push(frame);
 
@@ -410,21 +303,12 @@ impl VM {
         }
     }
 
-
     pub fn run(&mut self) {
         while !self.halted {
             self.execute_one_instruction();
         }
     }
-
-    pub fn get_stack_trace(&self) -> Vec<String> {
-        self.call_stack
-            .iter()
-            .map(|frame| frame.function_name.clone())
-            .collect()
-    }
 }
-
 
 pub struct Compiler {
     bytecode: Vec<Instruction>,
@@ -434,7 +318,6 @@ pub struct Compiler {
 }
 
 impl Compiler {
-
     pub fn new() -> Self {
         Compiler {
             bytecode: Vec::new(),
@@ -444,18 +327,16 @@ impl Compiler {
         }
     }
 
-
     fn emit(&mut self, instruction: Instruction) {
         self.bytecode.push(instruction);
         self.instruction_address += 1;
     }
 
-
     // Returns the starting address of compiled bytecode
-    fn compile_expr(&mut self, expr: &SourceExpr) -> Result<usize, CompileError> {
+    fn compile_expr(&mut self, expr: &LispExpr) -> usize {
         let start_address = self.instruction_address;
 
-        match &expr.expr {
+        match expr {
             // Case: Number or Boolean - emit Push instruction
             LispExpr::Number(n) => {
                 self.emit(Instruction::Push(Value::Integer(*n)));
@@ -470,187 +351,137 @@ impl Compiler {
                 if let Some(idx) = self.param_names.iter().position(|p| p == s) {
                     self.emit(Instruction::LoadArg(idx));
                 } else {
-                    return Err(CompileError::new(
-                        format!("Symbol '{}' not found in parameters", s),
-                        expr.location.clone(),
-                    ));
+                    panic!("Symbol '{}' not found in parameters", s);
                 }
             }
 
             // Case: List (function call or special form)
             LispExpr::List(items) => {
                 if items.is_empty() {
-                    return Err(CompileError::new(
-                        "Empty list cannot be compiled".to_string(),
-                        expr.location.clone(),
-                    ));
+                    panic!("Empty list cannot be compiled");
                 }
 
                 // Extract operator (first element should be a Symbol)
-                let operator = match &items[0].expr {
+                let operator = match &items[0] {
                     LispExpr::Symbol(s) => s.as_str(),
-                    _ => {
-                        return Err(CompileError::new(
-                            "First element of list must be a symbol (operator)".to_string(),
-                            items[0].location.clone(),
-                        ));
-                    }
+                    _ => panic!("First element of list must be a symbol (operator)"),
                 };
 
                 match operator {
-                    // Arithmetic operators: +, -, *, /
+                    // Arithmetic operators
                     "+" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "+ expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("+ expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Add);
                     }
                     "-" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "- expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("- expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Sub);
                     }
                     "*" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "* expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("* expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Mul);
                     }
                     "/" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "/ expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("/ expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Div);
                     }
                     "%" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "% expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("% expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Mod);
                     }
                     "neg" => {
                         if items.len() != 2 {
-                            return Err(CompileError::new(
-                                "neg expects exactly 1 argument".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("neg expects exactly 1 argument");
                         }
-                        self.compile_expr(&items[1])?;
+                        self.compile_expr(&items[1]);
                         self.emit(Instruction::Neg);
                     }
 
                     // Comparison operators
                     "<=" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "<= expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("<= expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Leq);
                     }
                     "<" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "< expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("< expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Lt);
                     }
                     ">" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "> expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("> expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Gt);
                     }
                     ">=" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                ">= expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!(">= expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Gte);
                     }
                     "==" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "== expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("== expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Eq);
                     }
                     "!=" => {
                         if items.len() != 3 {
-                            return Err(CompileError::new(
-                                "!= expects exactly 2 arguments".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("!= expects exactly 2 arguments");
                         }
-                        self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[1]);
+                        self.compile_expr(&items[2]);
                         self.emit(Instruction::Neq);
                     }
 
                     // Conditional: (if condition then-branch else-branch)
                     "if" => {
                         if items.len() != 4 {
-                            return Err(CompileError::new(
-                                "if expects exactly 3 arguments (condition, then, else)".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("if expects exactly 3 arguments (condition, then, else)");
                         }
 
                         // Compile condition
-                        self.compile_expr(&items[1])?;
+                        self.compile_expr(&items[1]);
 
                         // Emit JmpIfFalse with placeholder address
                         let jmp_if_false_index = self.bytecode.len();
                         self.emit(Instruction::JmpIfFalse(0)); // placeholder
 
                         // Compile then-branch
-                        self.compile_expr(&items[2])?;
+                        self.compile_expr(&items[2]);
 
                         // Emit Jmp to skip else-branch, with placeholder address
                         let jmp_to_end_index = self.bytecode.len();
@@ -663,7 +494,7 @@ impl Compiler {
                         self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(else_addr);
 
                         // Compile else-branch
-                        self.compile_expr(&items[3])?;
+                        self.compile_expr(&items[3]);
 
                         // Record end address
                         let end_addr = self.instruction_address;
@@ -675,12 +506,9 @@ impl Compiler {
                     // Print: (print expr)
                     "print" => {
                         if items.len() != 2 {
-                            return Err(CompileError::new(
-                                "print expects exactly 1 argument".to_string(),
-                                expr.location.clone(),
-                            ));
+                            panic!("print expects exactly 1 argument");
                         }
-                        self.compile_expr(&items[1])?;
+                        self.compile_expr(&items[1]);
                         self.emit(Instruction::Print);
                     }
 
@@ -689,7 +517,7 @@ impl Compiler {
                         // Compile all arguments
                         let arg_count = items.len() - 1;
                         for i in 1..items.len() {
-                            self.compile_expr(&items[i])?;
+                            self.compile_expr(&items[i]);
                         }
                         // Emit Call instruction
                         self.emit(Instruction::Call(operator.to_string(), arg_count));
@@ -698,74 +526,45 @@ impl Compiler {
             }
         }
 
-        Ok(start_address)
+        start_address
     }
 
-
-    fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
+    fn compile_defun(&mut self, expr: &LispExpr) {
         // Assert expr is (defun name (params...) body)
-        let items = match &expr.expr {
+        let items = match expr {
             LispExpr::List(items) => items,
-            _ => {
-                return Err(CompileError::new(
-                    "defun expects a list".to_string(),
-                    expr.location.clone(),
-                ));
-            }
+            _ => panic!("defun expects a list"),
         };
 
         if items.len() != 4 {
-            return Err(CompileError::new(
-                "defun expects 4 elements: (defun name (params) body)".to_string(),
-                expr.location.clone(),
-            ));
+            panic!("defun expects 4 elements: (defun name (params) body)");
         }
 
         // Check first element is "defun"
-        match &items[0].expr {
+        match &items[0] {
             LispExpr::Symbol(s) if s == "defun" => {}
-            _ => {
-                return Err(CompileError::new(
-                    "First element must be 'defun'".to_string(),
-                    items[0].location.clone(),
-                ));
-            }
+            _ => panic!("First element must be 'defun'"),
         }
 
         // Extract function name
-        let fn_name = match &items[1].expr {
+        let fn_name = match &items[1] {
             LispExpr::Symbol(s) => s.clone(),
-            _ => {
-                return Err(CompileError::new(
-                    "Function name must be a symbol".to_string(),
-                    items[1].location.clone(),
-                ));
-            }
+            _ => panic!("Function name must be a symbol"),
         };
 
         // Extract parameters
-        let params = match &items[2].expr {
+        let params = match &items[2] {
             LispExpr::List(p) => p,
-            _ => {
-                return Err(CompileError::new(
-                    "Parameters must be a list".to_string(),
-                    items[2].location.clone(),
-                ));
-            }
+            _ => panic!("Parameters must be a list"),
         };
 
-        let param_names: Result<Vec<String>, CompileError> = params
+        let param_names: Vec<String> = params
             .iter()
-            .map(|p| match &p.expr {
-                LispExpr::Symbol(s) => Ok(s.clone()),
-                _ => Err(CompileError::new(
-                    "Parameter must be a symbol".to_string(),
-                    p.location.clone(),
-                )),
+            .map(|p| match p {
+                LispExpr::Symbol(s) => s.clone(),
+                _ => panic!("Parameter must be a symbol"),
             })
             .collect();
-
-        let param_names = param_names?;
 
         // Save current compilation context
         let saved_bytecode = std::mem::take(&mut self.bytecode);
@@ -778,7 +577,7 @@ impl Compiler {
         self.instruction_address = 0;
 
         // Compile function body
-        self.compile_expr(&items[3])?;
+        self.compile_expr(&items[3]);
 
         // Emit return instruction
         self.emit(Instruction::Ret);
@@ -791,20 +590,15 @@ impl Compiler {
         self.bytecode = saved_bytecode;
         self.param_names = saved_params;
         self.instruction_address = saved_address;
-
-        Ok(())
     }
 
-
-    pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
+    pub fn compile_program(&mut self, exprs: &[LispExpr]) -> (HashMap<String, Vec<Instruction>>, Vec<Instruction>) {
         // First pass: compile all defun expressions
         for expr in exprs {
-            if let LispExpr::List(items) = &expr.expr {
-                if let Some(first) = items.first() {
-                    if let LispExpr::Symbol(s) = &first.expr {
-                        if s == "defun" {
-                            self.compile_defun(expr)?;
-                        }
+            if let LispExpr::List(items) = expr {
+                if let Some(LispExpr::Symbol(s)) = items.first() {
+                    if s == "defun" {
+                        self.compile_defun(expr);
                     }
                 }
             }
@@ -812,13 +606,9 @@ impl Compiler {
 
         // Second pass: compile non-defun expressions into main bytecode
         for expr in exprs {
-            let is_defun = if let LispExpr::List(items) = &expr.expr {
-                if let Some(first) = items.first() {
-                    if let LispExpr::Symbol(s) = &first.expr {
-                        s == "defun"
-                    } else {
-                        false
-                    }
+            let is_defun = if let LispExpr::List(items) = expr {
+                if let Some(LispExpr::Symbol(s)) = items.first() {
+                    s == "defun"
                 } else {
                     false
                 }
@@ -827,7 +617,7 @@ impl Compiler {
             };
 
             if !is_defun {
-                self.compile_expr(expr)?;
+                self.compile_expr(expr);
             }
         }
 
@@ -835,6 +625,6 @@ impl Compiler {
         self.emit(Instruction::Halt);
 
         // Return (functions, main bytecode)
-        Ok((self.functions.clone(), self.bytecode.clone()))
+        (self.functions.clone(), self.bytecode.clone())
     }
 }
