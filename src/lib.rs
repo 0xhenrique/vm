@@ -3,6 +3,7 @@ use std::collections::HashMap;
 pub mod parser;
 pub mod bytecode;
 pub mod disassembler;
+pub mod repl;
 
 
 #[derive(Debug, Clone, PartialEq)]

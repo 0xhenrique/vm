@@ -4,3 +4,19 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+
+[[bin]]
+name = "bytecomp"
+path = "src/bin/bytecomp.rs"
+
+[[bin]]
+name = "lisp-vm"
+path = "src/bin/lisp-vm.rs"
+
+[[bin]]
+name = "disasm"
+path = "src/bin/disasm.rs"
+
+[[bin]]
+name = "repl"
+path = "src/bin/repl.rs"
