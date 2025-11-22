@@ -238,4 +238,124 @@ mod tests {
             _ => panic!("Expected List"),
         }
     }
+
+    #[test]
+    fn test_parse_boolean_true() {
+        let mut parser = Parser::new("true");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Boolean(true));
+    }
+
+    #[test]
+    fn test_parse_boolean_false() {
+        let mut parser = Parser::new("false");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Boolean(false));
+    }
+
+    #[test]
+    fn test_parse_negative_number() {
+        let mut parser = Parser::new("-42");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Number(-42));
+    }
+
+    #[test]
+    fn test_parse_whitespace_handling() {
+        let mut parser = Parser::new("  ( +   1    2  )  ");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].expr, LispExpr::Symbol("+".to_string()));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_multiline() {
+        let source = r#"
+            (defun double (x)
+                (* x 2))
+        "#;
+        let mut parser = Parser::new(source);
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_empty_list_error() {
+        let mut parser = Parser::new("()");
+        let exprs = parser.parse_all().unwrap();
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 0);
+            }
+            _ => panic!("Expected empty list"),
+        }
+    }
+
+    #[test]
+    fn test_parse_unclosed_paren_error() {
+        let mut parser = Parser::new("(+ 1 2");
+        let result = parser.parse_all();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing closing parenthesis"));
+    }
+
+    #[test]
+    fn test_parse_location_tracking() {
+        let mut parser = Parser::new_with_file("42", "test.lisp".to_string());
+        let exprs = parser.parse_all().unwrap();
+
+        assert_eq!(exprs[0].location.file, "test.lisp");
+        assert_eq!(exprs[0].location.line, 1);
+        assert_eq!(exprs[0].location.column, 1);
+    }
+
+    #[test]
+    fn test_parse_multiline_location() {
+        let source = "10\n20\n30";
+        let mut parser = Parser::new(source);
+        let exprs = parser.parse_all().unwrap();
+
+        assert_eq!(exprs.len(), 3);
+        assert_eq!(exprs[0].location.line, 1);
+        assert_eq!(exprs[1].location.line, 2);
+        assert_eq!(exprs[2].location.line, 3);
+    }
+
+    #[test]
+    fn test_parse_operators() {
+        let operators = vec!["+", "-", "*", "/", "%", "<=", "<", ">", ">=", "==", "!=", "neg"];
+
+        for op in operators {
+            let mut parser = Parser::new(op);
+            let exprs = parser.parse_all().unwrap();
+            assert_eq!(exprs.len(), 1);
+            assert_eq!(exprs[0].expr, LispExpr::Symbol(op.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_parse_defun() {
+        let source = "(defun add (a b) (+ a b))";
+        let mut parser = Parser::new(source);
+        let exprs = parser.parse_all().unwrap();
+
+        assert_eq!(exprs.len(), 1);
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0].expr, LispExpr::Symbol("defun".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Symbol("add".to_string()));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
 }

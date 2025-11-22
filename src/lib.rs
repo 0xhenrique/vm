@@ -195,8 +195,7 @@ impl VM {
         }
     }
 
-
-    fn execute_one_instruction(&mut self) {
+    pub fn execute_one_instruction(&mut self) {
         if self.instruction_pointer >= self.current_bytecode.len() {
             self.halted = true;
             return;
