@@ -214,6 +214,11 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(34);
             write_u32(bytes, *idx as u32);
         }
+        Instruction::Append => bytes.push(35),
+        Instruction::MakeList(n) => {
+            bytes.push(36);
+            write_u32(bytes, *n as u32);
+        }
     }
 }
 
@@ -284,6 +289,8 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         }
         33 => Ok(Instruction::CallClosure(read_u32(bytes, pos)? as usize)),
         34 => Ok(Instruction::LoadCaptured(read_u32(bytes, pos)? as usize)),
+        35 => Ok(Instruction::Append),
+        36 => Ok(Instruction::MakeList(read_u32(bytes, pos)? as usize)),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }

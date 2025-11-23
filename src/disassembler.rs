@@ -90,6 +90,8 @@ fn format_instruction(instr: &Instruction) -> String {
         }
         Instruction::CallClosure(argc) => format!("CallClosure({})", argc),
         Instruction::LoadCaptured(idx) => format!("LoadCaptured({})", idx),
+        Instruction::Append => "Append".to_string(),
+        Instruction::MakeList(n) => format!("MakeList({})", n),
     }
 }
 

@@ -60,6 +60,9 @@ pub enum Instruction {
     IsSymbol,       // Pop value, push boolean indicating if it's a symbol
     SymbolToString, // Pop symbol, push string
     StringToSymbol, // Pop string, push symbol
+    // List manipulation
+    Append,         // Pop two lists, push their concatenation (second appended to first)
+    MakeList(usize), // Pop N values from stack and create a list from them (in order)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -616,6 +619,31 @@ impl VM {
                 }
                 self.instruction_pointer += 1;
             }
+            Instruction::Append => {
+                // Pop two lists and append them
+                let second = self.value_stack.pop().expect("Stack underflow");
+                let first = self.value_stack.pop().expect("Stack underflow");
+
+                match (first, second) {
+                    (Value::List(mut first_items), Value::List(second_items)) => {
+                        // Append second to first
+                        first_items.extend(second_items);
+                        self.value_stack.push(Value::List(first_items));
+                    }
+                    _ => panic!("append: expected two lists"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::MakeList(n) => {
+                // Pop n values and create a list
+                let mut items = Vec::new();
+                for _ in 0..n {
+                    items.push(self.value_stack.pop().expect("Stack underflow"));
+                }
+                items.reverse(); // Reverse because we popped in reverse order
+                self.value_stack.push(Value::List(items));
+                self.instruction_pointer += 1;
+            }
         }
     }
 
@@ -696,9 +724,17 @@ impl ValueLocation {
     }
 }
 
+// Macro definition
+#[derive(Debug, Clone)]
+struct MacroDef {
+    params: Vec<String>,
+    body: SourceExpr,
+}
+
 pub struct Compiler {
     bytecode: Vec<Instruction>,
     functions: HashMap<String, Vec<Instruction>>,
+    macros: HashMap<String, MacroDef>, // Macro definitions
     instruction_address: usize,
     param_names: Vec<String>, // Track parameter names for LoadArg
     pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
@@ -712,6 +748,7 @@ impl Compiler {
         Compiler {
             bytecode: Vec::new(),
             functions: HashMap::new(),
+            macros: HashMap::new(),
             instruction_address: 0,
             param_names: Vec::new(),
             pattern_bindings: HashMap::new(),
@@ -1015,6 +1052,17 @@ impl Compiler {
                         self.emit(Instruction::Push(value));
                     }
 
+                    // Quasiquote: (quasiquote expr) - like quote but allows unquote and unquote-splicing
+                    "quasiquote" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "quasiquote expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_quasiquote(&items[1])?;
+                    }
+
                     // Let: (let ((var val) ...) body)
                     "let" => {
                         if items.len() != 3 {
@@ -1123,32 +1171,41 @@ impl Compiler {
                         self.emit(Instruction::StringToSymbol);
                     }
 
-                    // User-defined function call or closure variable
+                    // User-defined function call or closure variable or macro
                     _ => {
-                        // Check if operator is a variable (could be a closure)
-                        let is_variable = self.local_bindings.contains_key(operator)
-                            || self.pattern_bindings.contains_key(operator)
-                            || self.param_names.contains(operator);
-
-                        if is_variable {
-                            // It's a variable - load it as a closure and use CallClosure
-                            self.compile_variable_load(operator)?;
-
-                            // Compile all arguments
-                            let arg_count = items.len() - 1;
-                            for i in 1..items.len() {
-                                self.compile_expr(&items[i])?;
-                            }
-
-                            // Call the closure
-                            self.emit(Instruction::CallClosure(arg_count));
+                        // Check if it's a macro
+                        if let Some(macro_def) = self.macros.get(operator).cloned() {
+                            // It's a macro - expand it at compile time
+                            let args: Vec<SourceExpr> = items[1..].to_vec();
+                            let expanded = self.expand_macro(&macro_def, &args)?;
+                            // Compile the expanded expression
+                            self.compile_expr(&expanded)?;
                         } else {
-                            // It's a regular function call
-                            let arg_count = items.len() - 1;
-                            for i in 1..items.len() {
-                                self.compile_expr(&items[i])?;
+                            // Check if operator is a variable (could be a closure)
+                            let is_variable = self.local_bindings.contains_key(operator)
+                                || self.pattern_bindings.contains_key(operator)
+                                || self.param_names.contains(operator);
+
+                            if is_variable {
+                                // It's a variable - load it as a closure and use CallClosure
+                                self.compile_variable_load(operator)?;
+
+                                // Compile all arguments
+                                let arg_count = items.len() - 1;
+                                for i in 1..items.len() {
+                                    self.compile_expr(&items[i])?;
+                                }
+
+                                // Call the closure
+                                self.emit(Instruction::CallClosure(arg_count));
+                            } else {
+                                // It's a regular function call
+                                let arg_count = items.len() - 1;
+                                for i in 1..items.len() {
+                                    self.compile_expr(&items[i])?;
+                                }
+                                self.emit(Instruction::Call(operator.to_string(), arg_count));
                             }
-                            self.emit(Instruction::Call(operator.to_string(), arg_count));
                         }
                     }
                 }
@@ -1720,6 +1777,157 @@ impl Compiler {
         Ok(())
     }
 
+    // Compile defmacro: (defmacro name (params) body)
+    fn compile_defmacro(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
+        let items = match &expr.expr {
+            LispExpr::List(items) => items,
+            _ => {
+                return Err(CompileError::new(
+                    "defmacro expects a list".to_string(),
+                    expr.location.clone(),
+                ));
+            }
+        };
+
+        // Check format: (defmacro name (params) body)
+        if items.len() != 4 {
+            return Err(CompileError::new(
+                "defmacro expects: (defmacro name (params) body)".to_string(),
+                expr.location.clone(),
+            ));
+        }
+
+        // Extract macro name
+        let macro_name = match &items[1].expr {
+            LispExpr::Symbol(s) => s.clone(),
+            _ => {
+                return Err(CompileError::new(
+                    "Macro name must be a symbol".to_string(),
+                    items[1].location.clone(),
+                ));
+            }
+        };
+
+        // Extract parameters
+        let params = match &items[2].expr {
+            LispExpr::List(p) => {
+                let mut param_names = Vec::new();
+                for param in p {
+                    match &param.expr {
+                        LispExpr::Symbol(s) => param_names.push(s.clone()),
+                        _ => {
+                            return Err(CompileError::new(
+                                "Macro parameters must be symbols".to_string(),
+                                param.location.clone(),
+                            ));
+                        }
+                    }
+                }
+                param_names
+            }
+            _ => {
+                return Err(CompileError::new(
+                    "Macro parameters must be a list".to_string(),
+                    items[2].location.clone(),
+                ));
+            }
+        };
+
+        // Store macro definition (body is unevaluated)
+        let macro_def = MacroDef {
+            params,
+            body: items[3].clone(),
+        };
+
+        self.macros.insert(macro_name, macro_def);
+
+        Ok(())
+    }
+
+    // Expand a macro call at compile time
+    fn expand_macro(&mut self, macro_def: &MacroDef, args: &[SourceExpr]) -> Result<SourceExpr, CompileError> {
+        // Check arity
+        if args.len() != macro_def.params.len() {
+            return Err(CompileError::new(
+                format!("Macro arity mismatch: expected {}, got {}", macro_def.params.len(), args.len()),
+                Location::unknown(),
+            ));
+        }
+
+        // Create a new compiler for evaluating the macro
+        let mut macro_compiler = Compiler::new();
+
+        // Set up macro parameters as "arguments"
+        macro_compiler.param_names = macro_def.params.clone();
+
+        // Compile macro body
+        macro_compiler.compile_expr(&macro_def.body)?;
+        macro_compiler.emit(Instruction::Halt);
+
+        let macro_bytecode = std::mem::take(&mut macro_compiler.bytecode);
+
+        // Create a VM and run the macro
+        let mut vm = VM::new();
+        vm.current_bytecode = macro_bytecode;
+
+        // Create a frame with the quoted arguments
+        let mut arg_values = Vec::new();
+        for arg_expr in args {
+            arg_values.push(self.expr_to_value(arg_expr)?);
+        }
+
+        let frame = Frame {
+            return_address: 0,
+            locals: arg_values,
+            return_bytecode: Vec::new(),
+            function_name: "<macro>".to_string(),
+            captured: Vec::new(),
+        };
+        vm.call_stack.push(frame);
+
+        // Run the VM
+        vm.run();
+
+        // Get the result from the stack
+        if vm.value_stack.is_empty() {
+            return Err(CompileError::new(
+                "Macro expansion produced no value".to_string(),
+                Location::unknown(),
+            ));
+        }
+
+        let result_value = vm.value_stack.pop().unwrap();
+
+        // Convert the result back to a SourceExpr
+        self.value_to_expr(&result_value)
+    }
+
+    // Convert a Value back to a SourceExpr (inverse of expr_to_value)
+    fn value_to_expr(&self, value: &Value) -> Result<SourceExpr, CompileError> {
+        match value {
+            Value::Integer(n) => Ok(SourceExpr::unknown(LispExpr::Number(*n))),
+            Value::Boolean(b) => Ok(SourceExpr::unknown(LispExpr::Boolean(*b))),
+            Value::Symbol(s) => Ok(SourceExpr::unknown(LispExpr::Symbol(s.clone()))),
+            Value::String(s) => {
+                // Strings are represented as special symbols in the AST
+                Ok(SourceExpr::unknown(LispExpr::Symbol(format!("__STRING__{}", s))))
+            }
+            Value::List(items) => {
+                let mut exprs = Vec::new();
+                for item in items {
+                    exprs.push(self.value_to_expr(item)?);
+                }
+                Ok(SourceExpr::unknown(LispExpr::List(exprs)))
+            }
+            Value::Closure { .. } => {
+                Err(CompileError::new(
+                    "Cannot convert closure to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
+        }
+    }
+
     // Helper to bind a pattern to a local stack position
     fn bind_pattern_to_local(
         &mut self,
@@ -2013,27 +2221,212 @@ impl Compiler {
         Ok(())
     }
 
+    // Compile quasiquote expression
+    // Quasiquote is like quote, but allows unquote (,) and unquote-splicing (,@)
+    fn compile_quasiquote(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
+        match &expr.expr {
+            // Check for unquote: (unquote expr)
+            LispExpr::List(items) if items.len() == 2 => {
+                if let LispExpr::Symbol(s) = &items[0].expr {
+                    if s == "unquote" {
+                        // Unquote: evaluate the expression
+                        self.compile_expr(&items[1])?;
+                        return Ok(());
+                    }
+                }
+                // Not an unquote, process as normal list
+                self.compile_quasiquote_list(items)?;
+            }
+
+            // Empty list or regular list
+            LispExpr::List(items) => {
+                self.compile_quasiquote_list(items)?;
+            }
+
+            // Dotted list
+            LispExpr::DottedList(_items, _rest) => {
+                // For dotted lists in quasiquote, we need to handle unquote-splicing specially
+                // For now, just quote the whole thing (simplified implementation)
+                let value = self.expr_to_value(expr)?;
+                self.emit(Instruction::Push(value));
+            }
+
+            // Atoms: just quote them
+            _ => {
+                let value = self.expr_to_value(expr)?;
+                self.emit(Instruction::Push(value));
+            }
+        }
+
+        Ok(())
+    }
+
+    // Helper to compile a quasiquoted list
+    // Handles unquote-splicing and builds the list at runtime
+    fn compile_quasiquote_list(&mut self, items: &[SourceExpr]) -> Result<(), CompileError> {
+        if items.is_empty() {
+            // Empty list
+            self.emit(Instruction::Push(Value::List(vec![])));
+            return Ok(());
+        }
+
+        // Check if we have any unquotes or splicing - if not, we can just quote the whole thing
+        let has_unquote_or_splice = items.iter().any(|item| {
+            if let LispExpr::List(inner) = &item.expr {
+                if inner.len() == 2 {
+                    if let LispExpr::Symbol(s) = &inner[0].expr {
+                        return s == "unquote" || s == "unquote-splicing";
+                    }
+                }
+            }
+            // Recursively check for unquotes in nested expressions
+            self.contains_unquote(item)
+        });
+
+        if !has_unquote_or_splice {
+            // No unquotes at all - just convert to a value and push it
+            let value = self.expr_to_value(&SourceExpr::new(
+                LispExpr::List(items.to_vec()),
+                Location::unknown(),
+            ))?;
+            self.emit(Instruction::Push(value));
+            return Ok(());
+        }
+
+        // We have unquotes - need to build the list at runtime
+        // Strategy: collect all elements into a vector of code that pushes each element
+        // Then build the list using cons operations
+
+        // For simplicity, let's build forward using an explicit loop
+        // We'll push all elements onto the stack, then build the list
+
+        let mut elem_count = 0;
+
+        // Check for splicing first
+        let has_splicing = items.iter().any(|item| {
+            if let LispExpr::List(inner) = &item.expr {
+                if inner.len() == 2 {
+                    if let LispExpr::Symbol(s) = &inner[0].expr {
+                        return s == "unquote-splicing";
+                    }
+                }
+            }
+            false
+        });
+
+        if has_splicing {
+            // Complex case with splicing
+            // We'll build the list in forward order differently
+            // Collect segments and splice them together
+
+            // Build forward: start with list containing all non-splice elements and splice points
+            self.emit(Instruction::Push(Value::List(vec![])));
+
+            for item in items.iter() {
+                if let LispExpr::List(inner) = &item.expr {
+                    if inner.len() == 2 {
+                        if let LispExpr::Symbol(s) = &inner[0].expr {
+                            if s == "unquote-splicing" {
+                                // Evaluate the list to splice and append it
+                                self.compile_expr(&inner[1])?;
+                                // Stack: [accumulator, splice_list]
+                                // We want: [accumulator..., splice_list...]
+                                self.emit_append()?;
+                                continue;
+                            } else if s == "unquote" {
+                                // Regular unquote - cons the element
+                                self.compile_expr(&inner[1])?;
+                                // Stack: [accumulator, elem]
+                                // We need to make a single-element list and append
+                                self.emit(Instruction::MakeList(1));
+                                self.emit_append()?;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                // Regular element - quasiquote it and append as single-element list
+                self.compile_quasiquote(item)?;
+                self.emit(Instruction::MakeList(1));
+                self.emit_append()?;
+            }
+        } else {
+            // No splicing - simpler case
+            // Push all elements onto stack, then use MakeList
+            for item in items {
+                if let LispExpr::List(inner) = &item.expr {
+                    if inner.len() == 2 {
+                        if let LispExpr::Symbol(s) = &inner[0].expr {
+                            if s == "unquote" {
+                                self.compile_expr(&inner[1])?;
+                                elem_count += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+                self.compile_quasiquote(item)?;
+                elem_count += 1;
+            }
+
+            // Now create a list from the elements on the stack
+            self.emit(Instruction::MakeList(elem_count));
+        }
+
+        Ok(())
+    }
+
+    // Helper to check if an expression contains unquote or unquote-splicing
+    fn contains_unquote(&self, expr: &SourceExpr) -> bool {
+        match &expr.expr {
+            LispExpr::List(items) => {
+                if items.len() == 2 {
+                    if let LispExpr::Symbol(s) = &items[0].expr {
+                        if s == "unquote" || s == "unquote-splicing" {
+                            return true;
+                        }
+                    }
+                }
+                items.iter().any(|item| self.contains_unquote(item))
+            }
+            LispExpr::DottedList(items, rest) => {
+                items.iter().any(|item| self.contains_unquote(item)) || self.contains_unquote(rest)
+            }
+            _ => false,
+        }
+    }
+
+    // Emit code to append two lists (both on stack)
+    // Stack before: [... list1 list2]
+    // Stack after: [... (append list1 list2)]
+    fn emit_append(&mut self) -> Result<(), CompileError> {
+        self.emit(Instruction::Append);
+        Ok(())
+    }
+
 
     pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
-        // First pass: compile all defun expressions
+        // First pass: compile all defun and defmacro expressions
         for expr in exprs {
             if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
                     if let LispExpr::Symbol(s) = &first.expr {
                         if s == "defun" {
                             self.compile_defun(expr)?;
+                        } else if s == "defmacro" {
+                            self.compile_defmacro(expr)?;
                         }
                     }
                 }
             }
         }
 
-        // Second pass: compile non-defun expressions into main bytecode
+        // Second pass: compile non-defun/non-defmacro expressions into main bytecode
         for expr in exprs {
-            let is_defun = if let LispExpr::List(items) = &expr.expr {
+            let is_definition = if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
                     if let LispExpr::Symbol(s) = &first.expr {
-                        s == "defun"
+                        s == "defun" || s == "defmacro"
                     } else {
                         false
                     }
@@ -2044,7 +2437,7 @@ impl Compiler {
                 false
             };
 
-            if !is_defun {
+            if !is_definition {
                 self.compile_expr(expr)?;
             }
         }
