@@ -14,9 +14,14 @@ pub enum Value {
     List(Vec<Value>),
     Symbol(String),
     String(String),
+    Closure {
+        params: Vec<String>,
+        body: Vec<Instruction>,
+        captured: Vec<(String, Value)>, // Captured environment as ordered pairs
+    },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Instruction {
     Push(Value),
     Add,
@@ -40,6 +45,9 @@ pub enum Instruction {
     PopN(usize),     // Pop N values from the stack
     Slide(usize),    // Pop top value, pop N values, push top value back (cleanup let bindings)
     CheckArity(usize, usize), // Check if frame.locals.len() == expected_arity, jump to addr if not
+    MakeClosure(Vec<String>, Vec<Instruction>, usize), // Create closure: (params, body, num_captured_vars)
+    CallClosure(usize), // Call closure with N arguments (pops closure + args from stack)
+    LoadCaptured(usize), // Load captured variable at index from current closure's environment
     Print,
     Halt,
     // List operations
@@ -191,6 +199,7 @@ pub struct Frame {
     pub locals: Vec<Value>,
     pub return_bytecode: Vec<Instruction>, // Bytecode to return to after function call
     pub function_name: String, // For stack traces
+    pub captured: Vec<Value>, // Captured variables for closures
 }
 
 pub struct VM {
@@ -413,6 +422,77 @@ impl VM {
                     self.instruction_pointer += 1;
                 }
             }
+            Instruction::MakeClosure(params, body, num_captured) => {
+                // Pop captured values from stack (compiler pushed them in order)
+                let mut captured_values = Vec::new();
+                for _ in 0..num_captured {
+                    captured_values.push(self.value_stack.pop().expect("Stack underflow during MakeClosure"));
+                }
+                captured_values.reverse(); // They were pushed in order, so reverse after popping
+
+                // Create closure with captured values
+                // We store as (name, value) pairs, but for now we don't have names at runtime
+                // So we'll just use indices and the compiler will emit LoadCaptured(idx)
+                let captured: Vec<(String, Value)> = captured_values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, v)| (format!("__captured_{}", i), v))
+                    .collect();
+
+                let closure = Value::Closure {
+                    params: params.clone(),
+                    body: body.clone(),
+                    captured,
+                };
+
+                self.value_stack.push(closure);
+                self.instruction_pointer += 1;
+            }
+            Instruction::CallClosure(arg_count) => {
+                // Pop arguments from stack (in reverse order)
+                let mut args = Vec::new();
+                for _ in 0..arg_count {
+                    args.push(self.value_stack.pop().expect("Stack underflow"));
+                }
+                args.reverse();
+
+                // Pop the closure
+                let closure = self.value_stack.pop().expect("Stack underflow");
+
+                match closure {
+                    Value::Closure { params, body, captured } => {
+                        // Verify arity
+                        if params.len() != args.len() {
+                            panic!("Closure arity mismatch: expected {}, got {}", params.len(), args.len());
+                        }
+
+                        // Create frame with arguments and captured environment
+                        let frame = Frame {
+                            return_address: self.instruction_pointer + 1,
+                            locals: args,
+                            return_bytecode: self.current_bytecode.to_vec(),
+                            function_name: "<closure>".to_string(),
+                            captured: captured.iter().map(|(_, v)| v.clone()).collect(),
+                        };
+
+                        self.call_stack.push(frame);
+
+                        // Switch to closure body bytecode
+                        self.current_bytecode = body;
+                        self.instruction_pointer = 0;
+                    }
+                    _ => panic!("CallClosure: expected closure, got {:?}", closure),
+                }
+            }
+            Instruction::LoadCaptured(idx) => {
+                // Load a captured variable from the current closure's environment
+                let frame = self.call_stack.last().expect("No frame for LoadCaptured");
+                let value = frame.captured.get(idx)
+                    .expect(&format!("Captured variable index {} out of bounds", idx))
+                    .clone();
+                self.value_stack.push(value);
+                self.instruction_pointer += 1;
+            }
             Instruction::Print => {
                 let value = self.value_stack.pop().expect("Stack underflow");
                 println!("{}", Self::format_value(&value));
@@ -441,6 +521,7 @@ impl VM {
                     locals: args,
                     return_bytecode: self.current_bytecode.clone(),
                     function_name: fn_name.clone(),
+                    captured: Vec::new(), // Regular functions don't have captured variables
                 };
                 self.call_stack.push(frame);
 
@@ -551,6 +632,9 @@ impl VM {
             }
             Value::Symbol(s) => s.clone(),
             Value::String(s) => format!("\"{}\"", s),
+            Value::Closure { params, .. } => {
+                format!("<closure/{}>", params.len())
+            }
         }
     }
 
@@ -573,6 +657,7 @@ impl VM {
 enum ValueLocation {
     Arg(usize),                                    // Direct argument
     Local(usize),                                  // Local variable on value stack
+    Captured(usize),                               // Captured variable in closure
     ListElement(Box<ValueLocation>, usize),        // i-th element of a list
     ListRest(Box<ValueLocation>, usize),           // Rest after skipping n elements
 }
@@ -586,6 +671,9 @@ impl ValueLocation {
             }
             ValueLocation::Local(pos) => {
                 compiler.emit(Instruction::GetLocal(*pos));
+            }
+            ValueLocation::Captured(idx) => {
+                compiler.emit(Instruction::LoadCaptured(*idx));
             }
             ValueLocation::ListElement(list_loc, idx) => {
                 // Load the list
@@ -694,18 +782,10 @@ impl Compiler {
                     ));
                 }
 
-                // Extract operator (first element should be a Symbol)
-                let operator = match &items[0].expr {
-                    LispExpr::Symbol(s) => s.as_str(),
-                    _ => {
-                        return Err(CompileError::new(
-                            "First element of list must be a symbol (operator)".to_string(),
-                            items[0].location.clone(),
-                        ));
-                    }
-                };
-
-                match operator {
+                // Check if operator is a symbol
+                if let LispExpr::Symbol(operator) = &items[0].expr {
+                    // Operator is a symbol - might be special form, built-in, or function call
+                    match operator.as_str() {
                     // Arithmetic operators: +, -, *, /
                     "+" => {
                         if items.len() < 3 {
@@ -947,6 +1027,17 @@ impl Compiler {
                         self.compile_let(&items[1], &items[2])?;
                     }
 
+                    // Lambda: (lambda (params) body)
+                    "lambda" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "lambda expects exactly 2 arguments: parameters and body".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_lambda(&items[1], &items[2])?;
+                    }
+
                     // List operations
                     "cons" => {
                         if items.len() != 3 {
@@ -1032,17 +1123,49 @@ impl Compiler {
                         self.emit(Instruction::StringToSymbol);
                     }
 
-                    // User-defined function call
+                    // User-defined function call or closure variable
                     _ => {
-                        // Compile all arguments
-                        let arg_count = items.len() - 1;
-                        for i in 1..items.len() {
-                            self.compile_expr(&items[i])?;
+                        // Check if operator is a variable (could be a closure)
+                        let is_variable = self.local_bindings.contains_key(operator)
+                            || self.pattern_bindings.contains_key(operator)
+                            || self.param_names.contains(operator);
+
+                        if is_variable {
+                            // It's a variable - load it as a closure and use CallClosure
+                            self.compile_variable_load(operator)?;
+
+                            // Compile all arguments
+                            let arg_count = items.len() - 1;
+                            for i in 1..items.len() {
+                                self.compile_expr(&items[i])?;
+                            }
+
+                            // Call the closure
+                            self.emit(Instruction::CallClosure(arg_count));
+                        } else {
+                            // It's a regular function call
+                            let arg_count = items.len() - 1;
+                            for i in 1..items.len() {
+                                self.compile_expr(&items[i])?;
+                            }
+                            self.emit(Instruction::Call(operator.to_string(), arg_count));
                         }
-                        // Emit Call instruction
-                        self.emit(Instruction::Call(operator.to_string(), arg_count));
                     }
                 }
+            } else {
+                // Non-symbol operator - should be a closure expression
+                // Compile the operator expression (should produce a closure)
+                self.compile_expr(&items[0])?;
+
+                // Compile all arguments
+                let arg_count = items.len() - 1;
+                for i in 1..items.len() {
+                    self.compile_expr(&items[i])?;
+                }
+
+                // Call the closure
+                self.emit(Instruction::CallClosure(arg_count));
+            }
             }
         }
 
@@ -1668,6 +1791,201 @@ impl Compiler {
             }
         }
 
+        Ok(())
+    }
+
+    // Compile lambda expression: (lambda (params) body)
+    fn compile_lambda(
+        &mut self,
+        params_expr: &SourceExpr,
+        body_expr: &SourceExpr,
+    ) -> Result<(), CompileError> {
+        // Parse parameters
+        let params = match &params_expr.expr {
+            LispExpr::List(p) => {
+                let mut param_names = Vec::new();
+                for param in p {
+                    match &param.expr {
+                        LispExpr::Symbol(s) => param_names.push(s.clone()),
+                        _ => {
+                            return Err(CompileError::new(
+                                "Lambda parameters must be symbols".to_string(),
+                                param.location.clone(),
+                            ));
+                        }
+                    }
+                }
+                param_names
+            }
+            _ => {
+                return Err(CompileError::new(
+                    "Lambda parameters must be a list".to_string(),
+                    params_expr.location.clone(),
+                ));
+            }
+        };
+
+        // Find free variables in body (variables not in params)
+        let free_vars = self.find_free_variables(body_expr, &params);
+
+        // Save current compilation context
+        let saved_bytecode = std::mem::take(&mut self.bytecode);
+        let saved_params = std::mem::take(&mut self.param_names);
+        let saved_local_bindings = self.local_bindings.clone();
+        let saved_pattern_bindings = self.pattern_bindings.clone();
+        let saved_address = self.instruction_address;
+        let saved_stack_depth = self.stack_depth;
+
+        // Set up new context for closure body
+        self.bytecode = Vec::new();
+        self.param_names = params.clone();
+        self.instruction_address = 0;
+        self.local_bindings.clear();
+        self.pattern_bindings.clear();
+        self.stack_depth = 0;
+
+        // Set up captured variables as "LoadCaptured" locations
+        for (i, var_name) in free_vars.iter().enumerate() {
+            self.pattern_bindings.insert(var_name.clone(), ValueLocation::Captured(i));
+        }
+
+        // Compile body
+        self.compile_expr(body_expr)?;
+        self.emit(Instruction::Ret);
+
+        // Get compiled body
+        let body_bytecode = std::mem::take(&mut self.bytecode);
+
+        // Restore context
+        self.bytecode = saved_bytecode;
+        self.param_names = saved_params;
+        self.local_bindings = saved_local_bindings;
+        self.pattern_bindings = saved_pattern_bindings;
+        self.instruction_address = saved_address;
+        self.stack_depth = saved_stack_depth;
+
+        // Emit code to push captured variable values onto stack
+        for var_name in &free_vars {
+            // Load the value of this free variable
+            self.compile_variable_load(var_name)?;
+        }
+
+        // Emit MakeClosure instruction
+        self.emit(Instruction::MakeClosure(params, body_bytecode, free_vars.len()));
+
+        Ok(())
+    }
+
+    // Find free variables in an expression (variables not in bound_vars)
+    fn find_free_variables(&self, expr: &SourceExpr, bound_vars: &[String]) -> Vec<String> {
+        let mut free_vars = Vec::new();
+        self.collect_free_variables(expr, bound_vars, &mut free_vars);
+        // Remove duplicates while preserving order
+        let mut seen = std::collections::HashSet::new();
+        free_vars.retain(|v| seen.insert(v.clone()));
+        free_vars
+    }
+
+    // Helper to recursively collect free variables
+    fn collect_free_variables(
+        &self,
+        expr: &SourceExpr,
+        bound_vars: &[String],
+        free_vars: &mut Vec<String>,
+    ) {
+        match &expr.expr {
+            LispExpr::Symbol(s) => {
+                // Check if it's a variable (not a string literal, not bound)
+                if !s.starts_with("__STRING__") && !bound_vars.contains(s) {
+                    // Check if it's available in current environment
+                    if self.local_bindings.contains_key(s)
+                        || self.pattern_bindings.contains_key(s)
+                        || self.param_names.contains(s)
+                    {
+                        free_vars.push(s.clone());
+                    }
+                }
+            }
+            LispExpr::List(items) => {
+                if items.is_empty() {
+                    return;
+                }
+
+                // Check for special forms that introduce bindings
+                if let LispExpr::Symbol(s) = &items[0].expr {
+                    match s.as_str() {
+                        "let" if items.len() == 3 => {
+                            // let introduces new bindings
+                            if let LispExpr::List(bindings) = &items[1].expr {
+                                let mut new_bound = bound_vars.to_vec();
+                                for binding in bindings {
+                                    if let LispExpr::List(pair) = &binding.expr {
+                                        if pair.len() == 2 {
+                                            // Collect free vars from value expression first
+                                            self.collect_free_variables(&pair[1], bound_vars, free_vars);
+                                            // Then add binding var to bound list
+                                            if let LispExpr::Symbol(var) = &pair[0].expr {
+                                                new_bound.push(var.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                // Collect from body with extended bindings
+                                self.collect_free_variables(&items[2], &new_bound, free_vars);
+                                return;
+                            }
+                        }
+                        "lambda" if items.len() == 3 => {
+                            // lambda introduces new parameters
+                            if let LispExpr::List(params) = &items[1].expr {
+                                let mut new_bound = bound_vars.to_vec();
+                                for param in params {
+                                    if let LispExpr::Symbol(p) = &param.expr {
+                                        new_bound.push(p.clone());
+                                    }
+                                }
+                                self.collect_free_variables(&items[2], &new_bound, free_vars);
+                                return;
+                            }
+                        }
+                        "quote" => {
+                            // Quoted expressions don't have free variables
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Default: recursively process all items
+                for item in items {
+                    self.collect_free_variables(item, bound_vars, free_vars);
+                }
+            }
+            LispExpr::DottedList(items, rest) => {
+                for item in items {
+                    self.collect_free_variables(item, bound_vars, free_vars);
+                }
+                self.collect_free_variables(rest, bound_vars, free_vars);
+            }
+            _ => {}
+        }
+    }
+
+    // Helper to load a variable (for capturing)
+    fn compile_variable_load(&mut self, var_name: &str) -> Result<(), CompileError> {
+        // Check local bindings first
+        if let Some(location) = self.local_bindings.get(var_name) {
+            location.clone().emit_load(self);
+        } else if let Some(location) = self.pattern_bindings.get(var_name) {
+            location.clone().emit_load(self);
+        } else if let Some(idx) = self.param_names.iter().position(|p| p == var_name) {
+            self.emit(Instruction::LoadArg(idx));
+        } else {
+            return Err(CompileError::new(
+                format!("Variable '{}' not found for capture", var_name),
+                Location::unknown(),
+            ));
+        }
         Ok(())
     }
 

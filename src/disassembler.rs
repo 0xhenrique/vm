@@ -85,6 +85,11 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::PopN(n) => format!("PopN({})", n),
         Instruction::Slide(n) => format!("Slide({})", n),
         Instruction::CheckArity(arity, addr) => format!("CheckArity({}, {})", arity, addr),
+        Instruction::MakeClosure(params, body, num_captured) => {
+            format!("MakeClosure({:?}, {} instructions, {} captured)", params, body.len(), num_captured)
+        }
+        Instruction::CallClosure(argc) => format!("CallClosure({})", argc),
+        Instruction::LoadCaptured(idx) => format!("LoadCaptured({})", idx),
     }
 }
 

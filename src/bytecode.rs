@@ -15,8 +15,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 4 (added let bindings with GetLocal and PopN instructions)
-    bytes.push(4);
+    // Version: 5 (added closures with MakeClosure, CallClosure, LoadCaptured instructions)
+    bytes.push(5);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -42,8 +42,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 4 {
-        return Err(format!("Unsupported bytecode version: {} (expected 4)", version));
+    if version != 5 {
+        return Err(format!("Unsupported bytecode version: {} (expected 5)", version));
     }
     pos += 1;
 
@@ -191,6 +191,29 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             write_u32(bytes, *arity as u32);
             write_u32(bytes, *addr as u32);
         }
+        Instruction::MakeClosure(params, body, num_captured) => {
+            bytes.push(32);
+            // Write params
+            write_u32(bytes, params.len() as u32);
+            for param in params {
+                write_string(bytes, param);
+            }
+            // Write body
+            write_u32(bytes, body.len() as u32);
+            for instr in body {
+                write_instruction(bytes, instr);
+            }
+            // Write num_captured
+            write_u32(bytes, *num_captured as u32);
+        }
+        Instruction::CallClosure(argc) => {
+            bytes.push(33);
+            write_u32(bytes, *argc as u32);
+        }
+        Instruction::LoadCaptured(idx) => {
+            bytes.push(34);
+            write_u32(bytes, *idx as u32);
+        }
     }
 }
 
@@ -242,6 +265,25 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
             let addr = read_u32(bytes, pos)? as usize;
             Ok(Instruction::CheckArity(arity, addr))
         }
+        32 => {
+            // Read params
+            let params_len = read_u32(bytes, pos)? as usize;
+            let mut params = Vec::new();
+            for _ in 0..params_len {
+                params.push(read_string(bytes, pos)?);
+            }
+            // Read body
+            let body_len = read_u32(bytes, pos)? as usize;
+            let mut body = Vec::new();
+            for _ in 0..body_len {
+                body.push(read_instruction(bytes, pos)?);
+            }
+            // Read num_captured
+            let num_captured = read_u32(bytes, pos)? as usize;
+            Ok(Instruction::MakeClosure(params, body, num_captured))
+        }
+        33 => Ok(Instruction::CallClosure(read_u32(bytes, pos)? as usize)),
+        34 => Ok(Instruction::LoadCaptured(read_u32(bytes, pos)? as usize)),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -270,6 +312,25 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
         Value::String(s) => {
             bytes.push(4);
             write_string(bytes, s);
+        }
+        Value::Closure { params, body, captured } => {
+            bytes.push(5);
+            // Write params
+            write_u32(bytes, params.len() as u32);
+            for param in params {
+                write_string(bytes, param);
+            }
+            // Write body
+            write_u32(bytes, body.len() as u32);
+            for instr in body {
+                write_instruction(bytes, instr);
+            }
+            // Write captured environment
+            write_u32(bytes, captured.len() as u32);
+            for (name, value) in captured {
+                write_string(bytes, name);
+                write_value(bytes, value);
+            }
         }
     }
 }
@@ -317,6 +378,29 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
         }
         3 => Ok(Value::Symbol(read_string(bytes, pos)?)),
         4 => Ok(Value::String(read_string(bytes, pos)?)),
+        5 => {
+            // Read params
+            let params_len = read_u32(bytes, pos)? as usize;
+            let mut params = Vec::new();
+            for _ in 0..params_len {
+                params.push(read_string(bytes, pos)?);
+            }
+            // Read body
+            let body_len = read_u32(bytes, pos)? as usize;
+            let mut body = Vec::new();
+            for _ in 0..body_len {
+                body.push(read_instruction(bytes, pos)?);
+            }
+            // Read captured environment
+            let captured_len = read_u32(bytes, pos)? as usize;
+            let mut captured = Vec::new();
+            for _ in 0..captured_len {
+                let name = read_string(bytes, pos)?;
+                let value = read_value(bytes, pos)?;
+                captured.push((name, value));
+            }
+            Ok(Value::Closure { params, body, captured })
+        }
         _ => Err(format!("Unknown value tag: {}", tag)),
     }
 }
