@@ -177,7 +177,7 @@ fn test_compile_error_undefined_variable() {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("not found"));
+    assert!(err.message.contains("Undefined variable"));
 }
 
 #[test]

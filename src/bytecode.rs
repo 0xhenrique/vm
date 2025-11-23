@@ -15,8 +15,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 3 (added symbol/string support)
-    bytes.push(3);
+    // Version: 4 (added let bindings with GetLocal and PopN instructions)
+    bytes.push(4);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -42,8 +42,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 3 {
-        return Err(format!("Unsupported bytecode version: {} (expected 3)", version));
+    if version != 4 {
+        return Err(format!("Unsupported bytecode version: {} (expected 4)", version));
     }
     pos += 1;
 
@@ -174,6 +174,18 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::IsSymbol => bytes.push(25),
         Instruction::SymbolToString => bytes.push(26),
         Instruction::StringToSymbol => bytes.push(27),
+        Instruction::GetLocal(pos) => {
+            bytes.push(28);
+            write_u32(bytes, *pos as u32);
+        }
+        Instruction::PopN(n) => {
+            bytes.push(29);
+            write_u32(bytes, *n as u32);
+        }
+        Instruction::Slide(n) => {
+            bytes.push(30);
+            write_u32(bytes, *n as u32);
+        }
     }
 }
 
@@ -217,6 +229,9 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         25 => Ok(Instruction::IsSymbol),
         26 => Ok(Instruction::SymbolToString),
         27 => Ok(Instruction::StringToSymbol),
+        28 => Ok(Instruction::GetLocal(read_u32(bytes, pos)? as usize)),
+        29 => Ok(Instruction::PopN(read_u32(bytes, pos)? as usize)),
+        30 => Ok(Instruction::Slide(read_u32(bytes, pos)? as usize)),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
