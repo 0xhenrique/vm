@@ -81,6 +81,9 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::IsSymbol => "IsSymbol".to_string(),
         Instruction::SymbolToString => "SymbolToString".to_string(),
         Instruction::StringToSymbol => "StringToSymbol".to_string(),
+        Instruction::GetLocal(pos) => format!("GetLocal({})", pos),
+        Instruction::PopN(n) => format!("PopN({})", n),
+        Instruction::Slide(n) => format!("Slide({})", n),
     }
 }
 

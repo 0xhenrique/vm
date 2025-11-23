@@ -36,6 +36,9 @@ pub enum Instruction {
     Call(String, usize),
     Ret,
     LoadArg(usize),
+    GetLocal(usize), // Load from value stack at position (from bottom)
+    PopN(usize),     // Pop N values from the stack
+    Slide(usize),    // Pop top value, pop N values, push top value back (cleanup let bindings)
     Print,
     Halt,
     // List operations
@@ -374,6 +377,30 @@ impl VM {
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
+            Instruction::GetLocal(pos) => {
+                // Load from value stack at position (from bottom)
+                let value = self.value_stack.get(pos)
+                    .expect(&format!("Stack position {} out of bounds", pos))
+                    .clone();
+                self.value_stack.push(value);
+                self.instruction_pointer += 1;
+            }
+            Instruction::PopN(n) => {
+                // Pop N values from the stack
+                for _ in 0..n {
+                    self.value_stack.pop().expect("Stack underflow during PopN");
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Slide(n) => {
+                // Pop the top value (result), pop N values (bindings), push result back
+                let result = self.value_stack.pop().expect("Stack underflow during Slide");
+                for _ in 0..n {
+                    self.value_stack.pop().expect("Stack underflow during Slide");
+                }
+                self.value_stack.push(result);
+                self.instruction_pointer += 1;
+            }
             Instruction::Print => {
                 let value = self.value_stack.pop().expect("Stack underflow");
                 println!("{}", Self::format_value(&value));
@@ -533,6 +560,7 @@ impl VM {
 #[derive(Debug, Clone)]
 enum ValueLocation {
     Arg(usize),                                    // Direct argument
+    Local(usize),                                  // Local variable on value stack
     ListElement(Box<ValueLocation>, usize),        // i-th element of a list
     ListRest(Box<ValueLocation>, usize),           // Rest after skipping n elements
 }
@@ -543,6 +571,9 @@ impl ValueLocation {
         match self {
             ValueLocation::Arg(idx) => {
                 compiler.emit(Instruction::LoadArg(*idx));
+            }
+            ValueLocation::Local(pos) => {
+                compiler.emit(Instruction::GetLocal(*pos));
             }
             ValueLocation::ListElement(list_loc, idx) => {
                 // Load the list
@@ -571,6 +602,8 @@ pub struct Compiler {
     instruction_address: usize,
     param_names: Vec<String>, // Track parameter names for LoadArg
     pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
+    local_bindings: HashMap<String, ValueLocation>, // Track let-bound variables
+    stack_depth: usize, // Track current stack depth for let bindings
 }
 
 impl Compiler {
@@ -582,6 +615,8 @@ impl Compiler {
             instruction_address: 0,
             param_names: Vec::new(),
             pattern_bindings: HashMap::new(),
+            local_bindings: HashMap::new(),
+            stack_depth: 0,
         }
     }
 
@@ -620,15 +655,18 @@ impl Compiler {
                     let string_content = s["__STRING__".len()..].to_string();
                     self.emit(Instruction::Push(Value::String(string_content)));
                 } else {
-                    // Check pattern bindings first (for nested pattern matches)
-                    if let Some(location) = self.pattern_bindings.get(s) {
+                    // Check local bindings first (let bindings)
+                    if let Some(location) = self.local_bindings.get(s) {
+                        location.clone().emit_load(self);
+                    } else if let Some(location) = self.pattern_bindings.get(s) {
+                        // Check pattern bindings (for nested pattern matches)
                         location.clone().emit_load(self);
                     } else if let Some(idx) = self.param_names.iter().position(|p| p == s) {
                         // Check if this symbol is a parameter
                         self.emit(Instruction::LoadArg(idx));
                     } else {
                         return Err(CompileError::new(
-                            format!("Symbol '{}' not found in parameters", s),
+                            format!("Undefined variable '{}'", s),
                             expr.location.clone(),
                         ));
                     }
@@ -883,6 +921,18 @@ impl Compiler {
                         // Convert the quoted expression to a runtime Value
                         let value = self.expr_to_value(&items[1])?;
                         self.emit(Instruction::Push(value));
+                    }
+
+                    // Let: (let ((var val) ...) body)
+                    "let" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "let expects exactly 2 arguments: bindings and body".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        self.compile_let(&items[1], &items[2])?;
                     }
 
                     // List operations
@@ -1451,6 +1501,177 @@ impl Compiler {
         Ok(())
     }
 
+    // Compile let expression: (let ((pattern value) ...) body)
+    fn compile_let(
+        &mut self,
+        bindings_expr: &SourceExpr,
+        body_expr: &SourceExpr,
+    ) -> Result<(), CompileError> {
+        // Parse bindings list
+        let bindings = match &bindings_expr.expr {
+            LispExpr::List(b) => b,
+            _ => {
+                return Err(CompileError::new(
+                    "let bindings must be a list".to_string(),
+                    bindings_expr.location.clone(),
+                ));
+            }
+        };
+
+        // Save current local bindings and stack depth
+        let saved_bindings = self.local_bindings.clone();
+        let saved_stack_depth = self.stack_depth;
+
+        let mut num_bindings = 0;
+
+        // Process each binding
+        for binding in bindings {
+            let binding_pair = match &binding.expr {
+                LispExpr::List(pair) => pair,
+                _ => {
+                    return Err(CompileError::new(
+                        "Each binding must be a list (pattern value)".to_string(),
+                        binding.location.clone(),
+                    ));
+                }
+            };
+
+            if binding_pair.len() != 2 {
+                return Err(CompileError::new(
+                    "Each binding must have exactly 2 elements: (pattern value)".to_string(),
+                    binding.location.clone(),
+                ));
+            }
+
+            let pattern = &binding_pair[0];
+            let value_expr = &binding_pair[1];
+
+            // Compile the value expression (pushes result onto stack)
+            self.compile_expr(value_expr)?;
+
+            // The value is now on the stack at position stack_depth
+            let value_position = self.stack_depth;
+            self.stack_depth += 1;
+            num_bindings += 1;
+
+            // Bind the pattern to this stack position
+            self.bind_pattern_to_local(pattern, value_position)?;
+        }
+
+        // Compile body with bindings available
+        self.compile_expr(body_expr)?;
+
+        // Clean up let bindings from stack
+        // Stack state: [... bindings(num_bindings) result]
+        // We want: [... result]
+        if num_bindings > 0 {
+            self.emit(Instruction::Slide(num_bindings));
+        }
+
+        // Restore binding context
+        self.local_bindings = saved_bindings;
+        self.stack_depth = saved_stack_depth;
+
+        Ok(())
+    }
+
+    // Helper to bind a pattern to a local stack position
+    fn bind_pattern_to_local(
+        &mut self,
+        pattern: &SourceExpr,
+        stack_pos: usize,
+    ) -> Result<(), CompileError> {
+        match &pattern.expr {
+            // Simple variable binding
+            LispExpr::Symbol(s) if s != "_" => {
+                self.local_bindings.insert(s.clone(), ValueLocation::Local(stack_pos));
+            }
+
+            // Wildcard - no binding needed
+            LispExpr::Symbol(s) if s == "_" => {
+                // No binding
+            }
+
+            // Destructuring patterns - need to extract components
+            LispExpr::List(items) => {
+                // Check if this is a quoted pattern
+                if items.len() == 2 {
+                    if let LispExpr::Symbol(s) = &items[0].expr {
+                        if s == "quote" {
+                            // Quoted pattern - this would match a literal, not destructure
+                            // For now, not supported in let (only in function patterns)
+                            return Err(CompileError::new(
+                                "Quoted literal patterns not supported in let bindings".to_string(),
+                                pattern.location.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                // Fixed-length list pattern: (a b c)
+                // Extract each element and bind
+                for (i, item_pattern) in items.iter().enumerate() {
+                    let elem_location = ValueLocation::ListElement(
+                        Box::new(ValueLocation::Local(stack_pos)),
+                        i
+                    );
+                    self.bind_pattern_element_to_location(item_pattern, elem_location)?;
+                }
+            }
+
+            // Dotted list pattern: (h . t)
+            LispExpr::DottedList(items, rest) => {
+                // Bind head elements
+                for (i, item_pattern) in items.iter().enumerate() {
+                    let elem_location = ValueLocation::ListElement(
+                        Box::new(ValueLocation::Local(stack_pos)),
+                        i
+                    );
+                    self.bind_pattern_element_to_location(item_pattern, elem_location)?;
+                }
+
+                // Bind rest
+                let rest_location = ValueLocation::ListRest(
+                    Box::new(ValueLocation::Local(stack_pos)),
+                    items.len()
+                );
+                self.bind_pattern_element_to_location(rest, rest_location)?;
+            }
+
+            _ => {
+                return Err(CompileError::new(
+                    format!("Unsupported pattern in let binding: {:?}", pattern.expr),
+                    pattern.location.clone(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    // Helper to bind a pattern element to a specific location
+    fn bind_pattern_element_to_location(
+        &mut self,
+        pattern: &SourceExpr,
+        location: ValueLocation,
+    ) -> Result<(), CompileError> {
+        match &pattern.expr {
+            LispExpr::Symbol(s) if s != "_" => {
+                self.local_bindings.insert(s.clone(), location);
+            }
+            LispExpr::Symbol(s) if s == "_" => {
+                // Wildcard, no binding
+            }
+            // Could recursively handle nested patterns here
+            _ => {
+                return Err(CompileError::new(
+                    "Only simple variables and wildcards supported in nested patterns".to_string(),
+                    pattern.location.clone(),
+                ));
+            }
+        }
+        Ok(())
+    }
 
 
     pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
