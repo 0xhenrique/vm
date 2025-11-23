@@ -186,6 +186,11 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(30);
             write_u32(bytes, *n as u32);
         }
+        Instruction::CheckArity(arity, addr) => {
+            bytes.push(31);
+            write_u32(bytes, *arity as u32);
+            write_u32(bytes, *addr as u32);
+        }
     }
 }
 
@@ -232,6 +237,11 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         28 => Ok(Instruction::GetLocal(read_u32(bytes, pos)? as usize)),
         29 => Ok(Instruction::PopN(read_u32(bytes, pos)? as usize)),
         30 => Ok(Instruction::Slide(read_u32(bytes, pos)? as usize)),
+        31 => {
+            let arity = read_u32(bytes, pos)? as usize;
+            let addr = read_u32(bytes, pos)? as usize;
+            Ok(Instruction::CheckArity(arity, addr))
+        }
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
