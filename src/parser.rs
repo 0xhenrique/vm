@@ -89,6 +89,25 @@ impl Parser {
             }
 
             items.push(self.parse_expr()?);
+
+            // Check for dot syntax: (a b . rest)
+            if self.pos < self.tokens.len() && self.tokens[self.pos].text == "." {
+                self.pos += 1; // consume '.'
+
+                // Parse the rest expression
+                let rest = self.parse_expr()?;
+
+                // Expect closing paren
+                if self.pos >= self.tokens.len() || self.tokens[self.pos].text != ")" {
+                    return Err("Expected ')' after dotted pair".to_string());
+                }
+                self.pos += 1; // consume ')'
+
+                return Ok(SourceExpr::new(
+                    LispExpr::DottedList(items, Box::new(rest)),
+                    location,
+                ));
+            }
         }
 
         Err("Unclosed list - missing closing parenthesis".to_string())

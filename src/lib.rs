@@ -77,6 +77,7 @@ pub enum LispExpr {
     Boolean(bool),
     Symbol(String),
     List(Vec<SourceExpr>),
+    DottedList(Vec<SourceExpr>, Box<SourceExpr>), // (a b . rest) - for cons patterns
 }
 
 // Wrapper that includes source location
@@ -341,23 +342,15 @@ impl VM {
             Instruction::Eq => {
                 let b = self.value_stack.pop().expect("Stack underflow");
                 let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
-                    (Value::Integer(x), Value::Integer(y)) => {
-                        self.value_stack.push(Value::Boolean(x == y));
-                    }
-                    _ => panic!("Type error: Eq expects integers"),
-                }
+                // Use PartialEq to compare all value types
+                self.value_stack.push(Value::Boolean(a == b));
                 self.instruction_pointer += 1;
             }
             Instruction::Neq => {
                 let b = self.value_stack.pop().expect("Stack underflow");
                 let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
-                    (Value::Integer(x), Value::Integer(y)) => {
-                        self.value_stack.push(Value::Boolean(x != y));
-                    }
-                    _ => panic!("Type error: Neq expects integers"),
-                }
+                // Use PartialEq to compare all value types
+                self.value_stack.push(Value::Boolean(a != b));
                 self.instruction_pointer += 1;
             }
             Instruction::Jmp(addr) => {
@@ -536,12 +529,48 @@ impl VM {
     }
 }
 
+// Represents where a value is stored for pattern matching
+#[derive(Debug, Clone)]
+enum ValueLocation {
+    Arg(usize),                                    // Direct argument
+    ListElement(Box<ValueLocation>, usize),        // i-th element of a list
+    ListRest(Box<ValueLocation>, usize),           // Rest after skipping n elements
+}
+
+impl ValueLocation {
+    // Emit instructions to load the value at this location onto the stack
+    fn emit_load(&self, compiler: &mut Compiler) {
+        match self {
+            ValueLocation::Arg(idx) => {
+                compiler.emit(Instruction::LoadArg(*idx));
+            }
+            ValueLocation::ListElement(list_loc, idx) => {
+                // Load the list
+                list_loc.emit_load(compiler);
+                // Extract the i-th element using car/cdr
+                for _ in 0..*idx {
+                    compiler.emit(Instruction::Cdr);
+                }
+                compiler.emit(Instruction::Car);
+            }
+            ValueLocation::ListRest(list_loc, skip_count) => {
+                // Load the list
+                list_loc.emit_load(compiler);
+                // Skip elements using cdr
+                for _ in 0..*skip_count {
+                    compiler.emit(Instruction::Cdr);
+                }
+            }
+        }
+    }
+}
 
 pub struct Compiler {
     bytecode: Vec<Instruction>,
     functions: HashMap<String, Vec<Instruction>>,
     instruction_address: usize,
     param_names: Vec<String>, // Track parameter names for LoadArg
+    pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
 }
 
 impl Compiler {
@@ -552,6 +581,7 @@ impl Compiler {
             functions: HashMap::new(),
             instruction_address: 0,
             param_names: Vec::new(),
+            pattern_bindings: HashMap::new(),
         }
     }
 
@@ -575,6 +605,14 @@ impl Compiler {
                 self.emit(Instruction::Push(Value::Boolean(*b)));
             }
 
+            // Case: DottedList - only valid in patterns
+            LispExpr::DottedList(_, _) => {
+                return Err(CompileError::new(
+                    "Dotted lists can only be used in patterns, not in expressions".to_string(),
+                    expr.location.clone(),
+                ));
+            }
+
             // Case: Symbol - check if it's a parameter or string literal
             LispExpr::Symbol(s) => {
                 // Check if it's a string literal (hack from parser)
@@ -582,8 +620,11 @@ impl Compiler {
                     let string_content = s["__STRING__".len()..].to_string();
                     self.emit(Instruction::Push(Value::String(string_content)));
                 } else {
-                    // Check if this symbol is a parameter
-                    if let Some(idx) = self.param_names.iter().position(|p| p == s) {
+                    // Check pattern bindings first (for nested pattern matches)
+                    if let Some(location) = self.pattern_bindings.get(s) {
+                        location.clone().emit_load(self);
+                    } else if let Some(idx) = self.param_names.iter().position(|p| p == s) {
+                        // Check if this symbol is a parameter
                         self.emit(Instruction::LoadArg(idx));
                     } else {
                         return Err(CompileError::new(
@@ -962,6 +1003,26 @@ impl Compiler {
                 }
                 Ok(Value::List(values))
             }
+            LispExpr::DottedList(items, rest) => {
+                // '(a b . rest) - cons a and b onto rest
+                let rest_value = self.expr_to_value(rest)?;
+
+                // Rest must be a list
+                if let Value::List(mut rest_list) = rest_value {
+                    // Prepend items to rest_list
+                    let mut result = Vec::new();
+                    for item in items {
+                        result.push(self.expr_to_value(item)?);
+                    }
+                    result.append(&mut rest_list);
+                    Ok(Value::List(result))
+                } else {
+                    Err(CompileError::new(
+                        "Rest of dotted list must be a list".to_string(),
+                        rest.location.clone(),
+                    ))
+                }
+            }
         }
     }
 
@@ -1098,7 +1159,13 @@ impl Compiler {
         }
 
         // Parse all clauses to extract patterns and bodies
-        let mut parsed_clauses = Vec::new();
+        // We need to handle two cases:
+        // 1. Pattern list: (defun foo ((a b) body)) - clause_items[0] is a List
+        // 2. Single dotted pattern: (defun foo ((a . b) body)) - clause_items[0] is a DottedList
+
+        // First collect owned pattern vecs for dotted list cases
+        let mut owned_patterns: Vec<Vec<SourceExpr>> = Vec::new();
+
         for clause in clauses {
             let clause_items = match &clause.expr {
                 LispExpr::List(items) => items,
@@ -1117,17 +1184,37 @@ impl Compiler {
                 ));
             }
 
-            let pattern = match &clause_items[0].expr {
-                LispExpr::List(p) => p,
+            // If it's a dotted list, wrap it as a single-element pattern vec
+            if matches!(&clause_items[0].expr, LispExpr::DottedList(_,_)) {
+                owned_patterns.push(vec![clause_items[0].clone()]);
+            }
+        }
+
+        // Now build parsed_clauses with proper references
+        let mut dotted_idx = 0;
+        let mut parsed_clauses: Vec<(&Vec<SourceExpr>, &SourceExpr)> = Vec::new();
+
+        for clause in clauses {
+            let clause_items = match &clause.expr {
+                LispExpr::List(items) => items,
+                _ => unreachable!(),
+            };
+
+            match &clause_items[0].expr {
+                LispExpr::List(p) => {
+                    parsed_clauses.push((p, &clause_items[1]));
+                }
+                LispExpr::DottedList(_,_) => {
+                    parsed_clauses.push((&owned_patterns[dotted_idx], &clause_items[1]));
+                    dotted_idx += 1;
+                }
                 _ => {
                     return Err(CompileError::new(
-                        "Pattern must be a list".to_string(),
+                        "Pattern tuple must be a list or dotted list".to_string(),
                         clause_items[0].location.clone(),
                     ));
                 }
-            };
-
-            parsed_clauses.push((pattern, &clause_items[1]));
+            }
         }
 
         // Determine arity (all clauses must have same number of patterns)
@@ -1170,87 +1257,186 @@ impl Compiler {
         Ok(())
     }
 
+    // Helper to compile a single pattern match
+    // Emits code to test if the value at the given location matches the pattern
+    // Returns bindings created by this pattern
+    // If is_last_clause is false, emits JmpIfFalse instructions and returns their indices for patching
+    fn compile_single_pattern(
+        &mut self,
+        pattern: &SourceExpr,
+        value_location: ValueLocation,
+        is_last_clause: bool,
+        bindings: &mut Vec<(String, ValueLocation)>,
+        jmp_indices: &mut Vec<usize>,
+    ) -> Result<(), CompileError> {
+        match &pattern.expr {
+            // Literal patterns: must match exactly
+            LispExpr::Number(n) => {
+                value_location.emit_load(self);
+                self.emit(Instruction::Push(Value::Integer(*n)));
+                self.emit(Instruction::Eq);
+                if !is_last_clause {
+                    jmp_indices.push(self.bytecode.len());
+                    self.emit(Instruction::JmpIfFalse(0));
+                }
+            }
+
+            LispExpr::Boolean(b) => {
+                value_location.emit_load(self);
+                self.emit(Instruction::Push(Value::Boolean(*b)));
+                self.emit(Instruction::Eq);
+                if !is_last_clause {
+                    jmp_indices.push(self.bytecode.len());
+                    self.emit(Instruction::JmpIfFalse(0));
+                }
+            }
+
+            // Variable patterns: always match, bind to name
+            LispExpr::Symbol(s) if s != "_" => {
+                bindings.push((s.clone(), value_location));
+            }
+
+            // Wildcard pattern: always match, don't bind
+            LispExpr::Symbol(s) if s == "_" => {
+                // No code needed
+            }
+
+            // List patterns
+            LispExpr::List(items) => {
+                // Check if this is a quoted expression (quote ...)
+                if items.len() == 2 {
+                    if let LispExpr::Symbol(s) = &items[0].expr {
+                        if s == "quote" {
+                            // Quoted pattern - match exact value
+                            let quoted_value = self.expr_to_value(&items[1])?;
+                            value_location.emit_load(self);
+                            self.emit(Instruction::Push(quoted_value));
+                            self.emit(Instruction::Eq);
+                            if !is_last_clause {
+                                jmp_indices.push(self.bytecode.len());
+                                self.emit(Instruction::JmpIfFalse(0));
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+
+                // Fixed-length list pattern: (a b c)
+                if !is_last_clause {
+                    // Check that value is a list
+                    value_location.emit_load(self);
+                    self.emit(Instruction::IsList);
+                    jmp_indices.push(self.bytecode.len());
+                    self.emit(Instruction::JmpIfFalse(0));
+                }
+
+                // TODO: Check length matches expected length
+                // For now, pattern matching will fail at runtime if lengths don't match
+
+                // Extract and match each element
+                for (i, item_pattern) in items.iter().enumerate() {
+                    // Load list, extract i-th element using car/cdr
+                    let elem_location = ValueLocation::ListElement(Box::new(value_location.clone()), i);
+                    self.compile_single_pattern(
+                        item_pattern,
+                        elem_location,
+                        is_last_clause,
+                        bindings,
+                        jmp_indices,
+                    )?;
+                }
+            }
+
+            // Dotted list pattern: (h . t)
+            LispExpr::DottedList(items, rest) => {
+                if !is_last_clause {
+                    // Check that value is a list
+                    value_location.emit_load(self);
+                    self.emit(Instruction::IsList);
+                    jmp_indices.push(self.bytecode.len());
+                    self.emit(Instruction::JmpIfFalse(0));
+
+                    // Check that list is not empty
+                    value_location.emit_load(self);
+                    self.emit(Instruction::Push(Value::List(vec![])));
+                    self.emit(Instruction::Neq); // NOT equal to empty
+                    jmp_indices.push(self.bytecode.len());
+                    self.emit(Instruction::JmpIfFalse(0));
+                }
+
+                // Match head elements
+                for (i, item_pattern) in items.iter().enumerate() {
+                    let elem_location = ValueLocation::ListElement(Box::new(value_location.clone()), i);
+                    self.compile_single_pattern(
+                        item_pattern,
+                        elem_location,
+                        is_last_clause,
+                        bindings,
+                        jmp_indices,
+                    )?;
+                }
+
+                // Match rest (cdr after skipping head items)
+                let rest_location = ValueLocation::ListRest(Box::new(value_location.clone()), items.len());
+                self.compile_single_pattern(
+                    rest,
+                    rest_location,
+                    is_last_clause,
+                    bindings,
+                    jmp_indices,
+                )?;
+            }
+
+            _ => {
+                return Err(CompileError::new(
+                    format!("Unsupported pattern type: {:?}", pattern.expr),
+                    pattern.location.clone(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     // Compile pattern matching dispatch for multiple clauses
     fn compile_pattern_dispatch(
         &mut self,
         clauses: &[(&Vec<SourceExpr>, &SourceExpr)],
-        arity: usize,
+        _arity: usize,
         _location: &Location,
     ) -> Result<(), CompileError> {
         for (i, (patterns, body)) in clauses.iter().enumerate() {
             let is_last_clause = i == clauses.len() - 1;
 
             // For each pattern in this clause, generate matching code
-            let mut bindings: Vec<(String, usize)> = Vec::new(); // (var_name, arg_index)
+            let mut bindings: Vec<(String, ValueLocation)> = Vec::new();
             let mut jmp_indices = Vec::new(); // Indices of JmpIfFalse to patch
 
             for (arg_idx, pattern) in patterns.iter().enumerate() {
-                match &pattern.expr {
-                    // Literal patterns: must match exactly
-                    LispExpr::Number(n) => {
-                        // Load argument
-                        self.emit(Instruction::LoadArg(arg_idx));
-                        // Push expected value
-                        self.emit(Instruction::Push(Value::Integer(*n)));
-                        // Check equality
-                        self.emit(Instruction::Eq);
-
-                        if !is_last_clause {
-                            // If not equal, jump to next clause
-                            jmp_indices.push(self.bytecode.len());
-                            self.emit(Instruction::JmpIfFalse(0)); // Will patch later
-                        }
-                    }
-
-                    LispExpr::Boolean(b) => {
-                        self.emit(Instruction::LoadArg(arg_idx));
-                        self.emit(Instruction::Push(Value::Boolean(*b)));
-                        self.emit(Instruction::Eq);
-
-                        if !is_last_clause {
-                            jmp_indices.push(self.bytecode.len());
-                            self.emit(Instruction::JmpIfFalse(0));
-                        }
-                    }
-
-                    // Variable patterns: always match, bind to name
-                    LispExpr::Symbol(s) if s != "_" => {
-                        // Variable pattern - just record binding
-                        bindings.push((s.clone(), arg_idx));
-                    }
-
-                    // Wildcard pattern: always match, don't bind
-                    LispExpr::Symbol(s) if s == "_" => {
-                        // Wildcard - matches anything, no binding needed
-                    }
-
-                    _ => {
-                        return Err(CompileError::new(
-                            "Unsupported pattern (only literals, variables, and _ for now)".to_string(),
-                            pattern.location.clone(),
-                        ));
-                    }
-                }
+                self.compile_single_pattern(
+                    pattern,
+                    ValueLocation::Arg(arg_idx),
+                    is_last_clause,
+                    &mut bindings,
+                    &mut jmp_indices,
+                )?;
             }
 
             // If all patterns matched, execute body with bindings
-            let saved_params = self.param_names.clone();
+            let saved_bindings = self.pattern_bindings.clone();
 
-            // Create new param map with bindings
-            let mut new_params = vec![String::new(); arity];
-            for i in 0..arity {
-                new_params[i] = format!("__arg{}", i);
+            // Set up pattern bindings for this clause
+            self.pattern_bindings.clear();
+            for (var_name, location) in bindings {
+                self.pattern_bindings.insert(var_name, location);
             }
-            for (var_name, arg_idx) in &bindings {
-                new_params[*arg_idx] = var_name.clone();
-            }
-            self.param_names = new_params;
 
             // Compile body
             self.compile_expr(body)?;
             self.emit(Instruction::Ret);
 
-            self.param_names = saved_params;
+            // Restore bindings
+            self.pattern_bindings = saved_bindings;
 
             // Patch jump-if-false instructions to jump to next clause
             if !is_last_clause {
