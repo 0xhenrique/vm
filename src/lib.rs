@@ -12,6 +12,8 @@ pub enum Value {
     Integer(i64),
     Boolean(bool),
     List(Vec<Value>),
+    Symbol(String),
+    String(String),
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +43,11 @@ pub enum Instruction {
     Car,     // Pop list, push first element
     Cdr,     // Pop list, push rest of list
     IsList,  // Pop value, push boolean indicating if it's a list
+    // String/Symbol operations
+    IsString,       // Pop value, push boolean indicating if it's a string
+    IsSymbol,       // Pop value, push boolean indicating if it's a symbol
+    SymbolToString, // Pop symbol, push string
+    StringToSymbol, // Pop string, push symbol
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -464,6 +471,38 @@ impl VM {
                 self.value_stack.push(Value::Boolean(is_list));
                 self.instruction_pointer += 1;
             }
+            Instruction::IsString => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                let is_string = matches!(value, Value::String(_));
+                self.value_stack.push(Value::Boolean(is_string));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsSymbol => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                let is_symbol = matches!(value, Value::Symbol(_));
+                self.value_stack.push(Value::Boolean(is_symbol));
+                self.instruction_pointer += 1;
+            }
+            Instruction::SymbolToString => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::Symbol(s) => {
+                        self.value_stack.push(Value::String(s));
+                    }
+                    _ => panic!("symbol->string: expected symbol"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringToSymbol => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::String(s) => {
+                        self.value_stack.push(Value::Symbol(s));
+                    }
+                    _ => panic!("string->symbol: expected string"),
+                }
+                self.instruction_pointer += 1;
+            }
         }
     }
 
@@ -478,6 +517,8 @@ impl VM {
                     .collect();
                 format!("({})", formatted_items.join(" "))
             }
+            Value::Symbol(s) => s.clone(),
+            Value::String(s) => format!("\"{}\"", s),
         }
     }
 
@@ -534,16 +575,22 @@ impl Compiler {
                 self.emit(Instruction::Push(Value::Boolean(*b)));
             }
 
-            // Case: Symbol - check if it's a parameter
+            // Case: Symbol - check if it's a parameter or string literal
             LispExpr::Symbol(s) => {
-                // Check if this symbol is a parameter
-                if let Some(idx) = self.param_names.iter().position(|p| p == s) {
-                    self.emit(Instruction::LoadArg(idx));
+                // Check if it's a string literal (hack from parser)
+                if s.starts_with("__STRING__") {
+                    let string_content = s["__STRING__".len()..].to_string();
+                    self.emit(Instruction::Push(Value::String(string_content)));
                 } else {
-                    return Err(CompileError::new(
-                        format!("Symbol '{}' not found in parameters", s),
-                        expr.location.clone(),
-                    ));
+                    // Check if this symbol is a parameter
+                    if let Some(idx) = self.param_names.iter().position(|p| p == s) {
+                        self.emit(Instruction::LoadArg(idx));
+                    } else {
+                        return Err(CompileError::new(
+                            format!("Symbol '{}' not found in parameters", s),
+                            expr.location.clone(),
+                        ));
+                    }
                 }
             }
 
@@ -840,6 +887,48 @@ impl Compiler {
                         self.emit(Instruction::IsList);
                     }
 
+                    // String/Symbol operations
+                    "string?" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "string? expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::IsString);
+                    }
+                    "symbol?" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "symbol? expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::IsSymbol);
+                    }
+                    "symbol->string" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "symbol->string expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::SymbolToString);
+                    }
+                    "string->symbol" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "string->symbol expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::StringToSymbol);
+                    }
+
                     // User-defined function call
                     _ => {
                         // Compile all arguments
@@ -863,14 +952,8 @@ impl Compiler {
             LispExpr::Number(n) => Ok(Value::Integer(*n)),
             LispExpr::Boolean(b) => Ok(Value::Boolean(*b)),
             LispExpr::Symbol(s) => {
-                // Symbols in quoted expressions become list values
-                // Representing symbols as single-character strings wrapped in a list
-                // @TODO: maybe it would be better to add a Symbol value type
-                // for simplicity, just error on symbols for now
-                Err(CompileError::new(
-                    format!("Symbols in quotes not yet supported: '{}'", s),
-                    expr.location.clone(),
-                ))
+                // Symbols in quoted expressions become Symbol values
+                Ok(Value::Symbol(s.clone()))
             }
             LispExpr::List(items) => {
                 let mut values = Vec::new();

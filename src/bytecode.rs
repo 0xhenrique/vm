@@ -15,8 +15,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 2 (added list support)
-    bytes.push(2);
+    // Version: 3 (added symbol/string support)
+    bytes.push(3);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -42,8 +42,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 2 {
-        return Err(format!("Unsupported bytecode version: {} (expected 2)", version));
+    if version != 3 {
+        return Err(format!("Unsupported bytecode version: {} (expected 3)", version));
     }
     pos += 1;
 
@@ -170,6 +170,10 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::Car => bytes.push(21),
         Instruction::Cdr => bytes.push(22),
         Instruction::IsList => bytes.push(23),
+        Instruction::IsString => bytes.push(24),
+        Instruction::IsSymbol => bytes.push(25),
+        Instruction::SymbolToString => bytes.push(26),
+        Instruction::StringToSymbol => bytes.push(27),
     }
 }
 
@@ -209,6 +213,10 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         21 => Ok(Instruction::Car),
         22 => Ok(Instruction::Cdr),
         23 => Ok(Instruction::IsList),
+        24 => Ok(Instruction::IsString),
+        25 => Ok(Instruction::IsSymbol),
+        26 => Ok(Instruction::SymbolToString),
+        27 => Ok(Instruction::StringToSymbol),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -229,6 +237,14 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             for item in items {
                 write_value(bytes, item);
             }
+        }
+        Value::Symbol(s) => {
+            bytes.push(3);
+            write_string(bytes, s);
+        }
+        Value::String(s) => {
+            bytes.push(4);
+            write_string(bytes, s);
         }
     }
 }
@@ -274,6 +290,8 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             }
             Ok(Value::List(items))
         }
+        3 => Ok(Value::Symbol(read_string(bytes, pos)?)),
+        4 => Ok(Value::String(read_string(bytes, pos)?)),
         _ => Err(format!("Unknown value tag: {}", tag)),
     }
 }

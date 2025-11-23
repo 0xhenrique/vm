@@ -56,6 +56,14 @@ impl Parser {
         } else if token.text == "false" {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Boolean(false), location))
+        } else if token.text.starts_with('"') && token.text.ends_with('"') {
+            // String literal
+            self.pos += 1;
+            let string_content = token.text[1..token.text.len()-1].to_string();
+            // @TODO: for now, represents strings as symbols prefixed with "str:"
+            // This is a temporary hack, there should be a String variant to LispExpr
+            // for simplicity, just a special symbol so the compiler can recognise
+            Ok(SourceExpr::new(LispExpr::Symbol(format!("__STRING__{}", string_content)), location))
         } else if let Ok(n) = token.text.parse::<i64>() {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Number(n), location))
@@ -93,57 +101,103 @@ fn tokenize(input: &str) -> Vec<Token> {
     let mut line = 1;
     let mut column = 1;
     let mut token_start_column = 1;
+    let mut in_string = false;
+    let mut string_content = String::new();
+    let mut string_start_line = 1;
+    let mut string_start_column = 1;
 
     for ch in input.chars() {
-        match ch {
-            '(' | ')' | '\'' => {
-                if !current.is_empty() {
-                    tokens.push(Token {
-                        text: current.clone(),
-                        line,
-                        column: token_start_column,
-                    });
-                    current.clear();
-                }
+        if in_string {
+            if ch == '"' {
+                // End of string
                 tokens.push(Token {
-                    text: ch.to_string(),
-                    line,
-                    column,
+                    text: format!("\"{}\"", string_content),
+                    line: string_start_line,
+                    column: string_start_column,
                 });
+                string_content.clear();
+                in_string = false;
                 column += 1;
                 token_start_column = column;
-            }
-            '\n' => {
-                if !current.is_empty() {
-                    tokens.push(Token {
-                        text: current.clone(),
-                        line,
-                        column: token_start_column,
-                    });
-                    current.clear();
-                }
-                line += 1;
-                column = 1;
-                token_start_column = 1;
-            }
-            ' ' | '\t' | '\r' => {
-                if !current.is_empty() {
-                    tokens.push(Token {
-                        text: current.clone(),
-                        line,
-                        column: token_start_column,
-                    });
-                    current.clear();
-                }
+            } else if ch == '\\' {
+                // Handle escape sequences (basic support)
+                string_content.push(ch);
                 column += 1;
-                token_start_column = column;
+            } else {
+                string_content.push(ch);
+                if ch == '\n' {
+                    line += 1;
+                    column = 1;
+                } else {
+                    column += 1;
+                }
             }
-            _ => {
-                if current.is_empty() {
+        } else {
+            match ch {
+                '"' => {
+                    // Start of string
+                    if !current.is_empty() {
+                        tokens.push(Token {
+                            text: current.clone(),
+                            line,
+                            column: token_start_column,
+                        });
+                        current.clear();
+                    }
+                    in_string = true;
+                    string_start_line = line;
+                    string_start_column = column;
+                    column += 1;
+                }
+                '(' | ')' | '\'' => {
+                    if !current.is_empty() {
+                        tokens.push(Token {
+                            text: current.clone(),
+                            line,
+                            column: token_start_column,
+                        });
+                        current.clear();
+                    }
+                    tokens.push(Token {
+                        text: ch.to_string(),
+                        line,
+                        column,
+                    });
+                    column += 1;
                     token_start_column = column;
                 }
-                current.push(ch);
-                column += 1;
+                '\n' => {
+                    if !current.is_empty() {
+                        tokens.push(Token {
+                            text: current.clone(),
+                            line,
+                            column: token_start_column,
+                        });
+                        current.clear();
+                    }
+                    line += 1;
+                    column = 1;
+                    token_start_column = 1;
+                }
+                ' ' | '\t' | '\r' => {
+                    if !current.is_empty() {
+                        tokens.push(Token {
+                            text: current.clone(),
+                            line,
+                            column: token_start_column,
+                        });
+                        current.clear();
+                    }
+                    column += 1;
+                    token_start_column = column;
+                }
+                _ => {
+                    if current.is_empty() {
+                        token_start_column = column;
+                    }
+                    current.push(ch);
+                    column += 1;
+                }
             }
         }
     }

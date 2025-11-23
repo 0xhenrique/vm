@@ -163,6 +163,8 @@ impl Repl {
                     .collect();
                 format!("({})", formatted_items.join(" "))
             }
+            Value::Symbol(s) => s.clone(),
+            Value::String(s) => format!("\"{}\"", s),
         }
     }
 

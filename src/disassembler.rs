@@ -77,6 +77,10 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::Car => "Car".to_string(),
         Instruction::Cdr => "Cdr".to_string(),
         Instruction::IsList => "IsList".to_string(),
+        Instruction::IsString => "IsString".to_string(),
+        Instruction::IsSymbol => "IsSymbol".to_string(),
+        Instruction::SymbolToString => "SymbolToString".to_string(),
+        Instruction::StringToSymbol => "StringToSymbol".to_string(),
     }
 }
 

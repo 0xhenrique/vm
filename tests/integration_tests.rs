@@ -482,3 +482,74 @@ fn test_list_in_function() {
     let result = compile_and_get_result(source);
     assert_eq!(result, 20);
 }
+
+#[test]
+fn test_quoted_symbols() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = "(car '(+ - *))";
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("+".to_string())));
+}
+
+#[test]
+fn test_string_literals() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"(string? "hello")"#;
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::Boolean(true)));
+}
+
+#[test]
+fn test_symbol_string_conversion() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = "(symbol->string 'foo)";
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::String("foo".to_string())));
+
+    let source = r#"(string->symbol "bar")"#;
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("bar".to_string())));
+}
