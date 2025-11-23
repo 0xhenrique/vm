@@ -553,3 +553,372 @@ fn test_symbol_string_conversion() {
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("bar".to_string())));
 }
+
+#[test]
+fn test_map_basic() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun map
+          ((f '()) '())
+          ((f (h . t)) (cons (f h) (map f t))))
+
+        (map (lambda (x) (* x 2)) '(1 2 3 4 5))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(2),
+        Value::Integer(4),
+        Value::Integer(6),
+        Value::Integer(8),
+        Value::Integer(10),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_map_empty_list() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun map
+          ((f '()) '())
+          ((f (h . t)) (cons (f h) (map f t))))
+
+        (map (lambda (x) (+ x 1)) '())
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
+}
+
+#[test]
+fn test_filter_basic() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (filter (lambda (x) (> x 2)) '(1 2 3 4 5))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(3),
+        Value::Integer(4),
+        Value::Integer(5),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_filter_all_pass() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (filter (lambda (x) true) '(1 2 3))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(1),
+        Value::Integer(2),
+        Value::Integer(3),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_filter_none_pass() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (filter (lambda (x) false) '(1 2 3))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
+}
+
+#[test]
+fn test_reduce_sum() {
+    let source = r#"
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (reduce (lambda (acc x) (+ acc x)) 0 '(1 2 3 4 5))
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 15);
+}
+
+#[test]
+fn test_reduce_product() {
+    let source = r#"
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (reduce (lambda (acc x) (* acc x)) 1 '(1 2 3 4 5))
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 120);
+}
+
+#[test]
+fn test_reduce_empty_list() {
+    let source = r#"
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (reduce (lambda (acc x) (+ acc x)) 100 '())
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 100);
+}
+
+#[test]
+fn test_map_with_closure() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun map
+          ((f '()) '())
+          ((f (h . t)) (cons (f h) (map f t))))
+
+        (defun make-adder (n)
+          (lambda (x) (+ x n)))
+
+        (map (make-adder 10) '(1 2 3))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(11),
+        Value::Integer(12),
+        Value::Integer(13),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_filter_with_closure() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (defun make-predicate (threshold)
+          (lambda (x) (> x threshold)))
+
+        (filter (make-predicate 5) '(3 6 2 8 4 9))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(6),
+        Value::Integer(8),
+        Value::Integer(9),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_compose_map_and_filter() {
+    use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
+
+    let source = r#"
+        (defun map
+          ((f '()) '())
+          ((f (h . t)) (cons (f h) (map f t))))
+
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (filter (lambda (x) (> x 5))
+                (map (lambda (x) (* x 2)) '(1 2 3 4 5)))
+    "#;
+
+    let mut parser = Parser::new(source);
+    let exprs = parser.parse_all().unwrap();
+    let mut compiler = Compiler::new();
+    let (functions, main) = compiler.compile_program(&exprs).unwrap();
+
+    let mut vm = VM::new();
+    vm.functions = functions;
+    vm.current_bytecode = main;
+    vm.run();
+
+    let expected = Value::List(vec![
+        Value::Integer(6),
+        Value::Integer(8),
+        Value::Integer(10),
+    ]);
+    assert_eq!(vm.value_stack.last(), Some(&expected));
+}
+
+#[test]
+fn test_compose_map_filter_reduce() {
+    let source = r#"
+        (defun map
+          ((f '()) '())
+          ((f (h . t)) (cons (f h) (map f t))))
+
+        (defun filter
+          ((predicate '()) '())
+          ((predicate (h . t))
+            (if (predicate h)
+              (cons h (filter predicate t))
+              (filter predicate t))))
+
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (defun is-even (n)
+          (if (< n 2)
+            (if (< n 1)
+              true
+              false)
+            (is-even (- n 2))))
+
+        (reduce (lambda (acc x) (+ acc x))
+                0
+                (map (lambda (x) (* x x))
+                     (filter (lambda (n)
+                               (if (< n 2)
+                                 (if (< n 1)
+                                   true
+                                   false)
+                                 (is-even (- n 2))))
+                             '(1 2 3 4 5 6 7 8))))
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 120); // 2^2 + 4^2 + 6^2 + 8^2 = 4 + 16 + 36 + 64 = 120
+}
+
+#[test]
+fn test_reduce_count() {
+    let source = r#"
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (reduce (lambda (acc x) (+ acc 1)) 0 '(a b c d e))
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 5);
+}
+
+#[test]
+fn test_reduce_max() {
+    let source = r#"
+        (defun reduce
+          ((f acc '()) acc)
+          ((f acc (h . t)) (reduce f (f acc h) t)))
+
+        (reduce (lambda (a b) (if (> a b) a b)) 0 '(3 7 2 9 4 1))
+    "#;
+
+    let result = compile_and_get_result(source);
+    assert_eq!(result, 9);
+}
