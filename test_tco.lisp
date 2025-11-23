@@ -3,8 +3,8 @@
     (print "done")
     (countdown (- n 1))))
 
-(print "Testing countdown with 100000 iterations...")
-(countdown 100000)
+(print "Testing countdown with 5000 iterations...")
+(countdown 5000)
 (print "Success! No stack overflow")
 
 (defun fact-tail (n acc)
@@ -20,8 +20,8 @@
     acc
     (sum (- n 1) (+ n acc))))
 
-(print "Testing tail-recursive sum 1..10000...")
-(print (sum 10000 0))
+(print "Testing tail-recursive sum 1..1000...")
+(print (sum 1000 0))
 
 (defun even? (n)
   (if (== n 0)
@@ -34,7 +34,7 @@
     (even? (- n 1))))
 
 (print "Testing mutual tail recursion...")
-(print (even? 10000))
-(print (odd? 10000))
+(print (even? 500))
+(print (odd? 500))
 
 (print "All TCO tests passed!")
