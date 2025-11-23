@@ -965,8 +965,7 @@ impl Compiler {
         }
     }
 
-    fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
-        // Assert expr is (defun name (params...) body)
+        fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
         let items = match &expr.expr {
             LispExpr::List(items) => items,
             _ => {
@@ -977,9 +976,10 @@ impl Compiler {
             }
         };
 
-        if items.len() != 4 {
+        // Check minimum length (defun name ...)
+        if items.len() < 3 {
             return Err(CompileError::new(
-                "defun expects 4 elements: (defun name (params) body)".to_string(),
+                "defun expects at least: (defun name clause)".to_string(),
                 expr.location.clone(),
             ));
         }
@@ -1006,13 +1006,38 @@ impl Compiler {
             }
         };
 
+        // Determine if this is old-style (single clause) or new-style (multi-clause)
+        // Old: (defun name (params) body) - 4 elements, items[2] is a list of symbols
+        // New: (defun name ((pattern) body) ...) - 3+ elements, items[2] is a list starting with list
+
+        let is_old_style = items.len() == 4 &&
+            matches!(&items[2].expr, LispExpr::List(params) if
+                params.iter().all(|p| matches!(&p.expr, LispExpr::Symbol(_))));
+
+        if is_old_style {
+            // Old single-clause style: (defun name (params) body)
+            self.compile_single_clause_defun(&fn_name, &items[2], &items[3])
+        } else {
+            // New multi-clause style: (defun name ((pattern1) body1) ((pattern2) body2) ...)
+            let clauses: Vec<&SourceExpr> = items[2..].iter().collect();
+            self.compile_multi_clause_defun(&fn_name, &clauses, &items[1].location)
+        }
+    }
+
+    // Compile old-style single-clause defun
+    fn compile_single_clause_defun(
+        &mut self,
+        fn_name: &str,
+        params_expr: &SourceExpr,
+        body_expr: &SourceExpr,
+    ) -> Result<(), CompileError> {
         // Extract parameters
-        let params = match &items[2].expr {
+        let params = match &params_expr.expr {
             LispExpr::List(p) => p,
             _ => {
                 return Err(CompileError::new(
                     "Parameters must be a list".to_string(),
-                    items[2].location.clone(),
+                    params_expr.location.clone(),
                 ));
             }
         };
@@ -1041,14 +1066,14 @@ impl Compiler {
         self.instruction_address = 0;
 
         // Compile function body
-        self.compile_expr(&items[3])?;
+        self.compile_expr(body_expr)?;
 
         // Emit return instruction
         self.emit(Instruction::Ret);
 
-        // Store function bytecode
+        // Store compiled function
         let fn_bytecode = std::mem::take(&mut self.bytecode);
-        self.functions.insert(fn_name, fn_bytecode);
+        self.functions.insert(fn_name.to_string(), fn_bytecode);
 
         // Restore context
         self.bytecode = saved_bytecode;
@@ -1057,6 +1082,189 @@ impl Compiler {
 
         Ok(())
     }
+
+    // Compile new-style multi-clause defun
+    fn compile_multi_clause_defun(
+        &mut self,
+        fn_name: &str,
+        clauses: &[&SourceExpr],
+        name_location: &Location,
+    ) -> Result<(), CompileError> {
+        if clauses.is_empty() {
+            return Err(CompileError::new(
+                "defun requires at least one clause".to_string(),
+                name_location.clone(),
+            ));
+        }
+
+        // Parse all clauses to extract patterns and bodies
+        let mut parsed_clauses = Vec::new();
+        for clause in clauses {
+            let clause_items = match &clause.expr {
+                LispExpr::List(items) => items,
+                _ => {
+                    return Err(CompileError::new(
+                        "Each clause must be a list ((pattern...) body)".to_string(),
+                        clause.location.clone(),
+                    ));
+                }
+            };
+
+            if clause_items.len() != 2 {
+                return Err(CompileError::new(
+                    "Each clause must have exactly 2 elements: (pattern body)".to_string(),
+                    clause.location.clone(),
+                ));
+            }
+
+            let pattern = match &clause_items[0].expr {
+                LispExpr::List(p) => p,
+                _ => {
+                    return Err(CompileError::new(
+                        "Pattern must be a list".to_string(),
+                        clause_items[0].location.clone(),
+                    ));
+                }
+            };
+
+            parsed_clauses.push((pattern, &clause_items[1]));
+        }
+
+        // Determine arity (all clauses must have same number of patterns)
+        let arity = parsed_clauses[0].0.len();
+        for (pattern, _) in &parsed_clauses {
+            if pattern.len() != arity {
+                return Err(CompileError::new(
+                    format!("All clauses must have same arity (expected {}, got {})", arity, pattern.len()),
+                    name_location.clone(),
+                ));
+            }
+        }
+
+        // Save current compilation context
+        let saved_bytecode = std::mem::take(&mut self.bytecode);
+        let saved_params = std::mem::take(&mut self.param_names);
+        let saved_address = self.instruction_address;
+
+        // Set up new context for function
+        self.bytecode = Vec::new();
+        self.param_names = (0..arity).map(|i| format!("__arg{}", i)).collect();
+        self.instruction_address = 0;
+
+        // Compile pattern matching dispatch
+        self.compile_pattern_dispatch(&parsed_clauses, arity, name_location)?;
+
+        // Emit error if no clause matched
+        // For now, just emit a halt (will panic at runtime)
+        self.emit(Instruction::Halt);
+
+        // Store compiled function
+        let fn_bytecode = std::mem::take(&mut self.bytecode);
+        self.functions.insert(fn_name.to_string(), fn_bytecode);
+
+        // Restore context
+        self.bytecode = saved_bytecode;
+        self.param_names = saved_params;
+        self.instruction_address = saved_address;
+
+        Ok(())
+    }
+
+    // Compile pattern matching dispatch for multiple clauses
+    fn compile_pattern_dispatch(
+        &mut self,
+        clauses: &[(&Vec<SourceExpr>, &SourceExpr)],
+        arity: usize,
+        _location: &Location,
+    ) -> Result<(), CompileError> {
+        for (i, (patterns, body)) in clauses.iter().enumerate() {
+            let is_last_clause = i == clauses.len() - 1;
+
+            // For each pattern in this clause, generate matching code
+            let mut bindings: Vec<(String, usize)> = Vec::new(); // (var_name, arg_index)
+            let mut jmp_indices = Vec::new(); // Indices of JmpIfFalse to patch
+
+            for (arg_idx, pattern) in patterns.iter().enumerate() {
+                match &pattern.expr {
+                    // Literal patterns: must match exactly
+                    LispExpr::Number(n) => {
+                        // Load argument
+                        self.emit(Instruction::LoadArg(arg_idx));
+                        // Push expected value
+                        self.emit(Instruction::Push(Value::Integer(*n)));
+                        // Check equality
+                        self.emit(Instruction::Eq);
+
+                        if !is_last_clause {
+                            // If not equal, jump to next clause
+                            jmp_indices.push(self.bytecode.len());
+                            self.emit(Instruction::JmpIfFalse(0)); // Will patch later
+                        }
+                    }
+
+                    LispExpr::Boolean(b) => {
+                        self.emit(Instruction::LoadArg(arg_idx));
+                        self.emit(Instruction::Push(Value::Boolean(*b)));
+                        self.emit(Instruction::Eq);
+
+                        if !is_last_clause {
+                            jmp_indices.push(self.bytecode.len());
+                            self.emit(Instruction::JmpIfFalse(0));
+                        }
+                    }
+
+                    // Variable patterns: always match, bind to name
+                    LispExpr::Symbol(s) if s != "_" => {
+                        // Variable pattern - just record binding
+                        bindings.push((s.clone(), arg_idx));
+                    }
+
+                    // Wildcard pattern: always match, don't bind
+                    LispExpr::Symbol(s) if s == "_" => {
+                        // Wildcard - matches anything, no binding needed
+                    }
+
+                    _ => {
+                        return Err(CompileError::new(
+                            "Unsupported pattern (only literals, variables, and _ for now)".to_string(),
+                            pattern.location.clone(),
+                        ));
+                    }
+                }
+            }
+
+            // If all patterns matched, execute body with bindings
+            let saved_params = self.param_names.clone();
+
+            // Create new param map with bindings
+            let mut new_params = vec![String::new(); arity];
+            for i in 0..arity {
+                new_params[i] = format!("__arg{}", i);
+            }
+            for (var_name, arg_idx) in &bindings {
+                new_params[*arg_idx] = var_name.clone();
+            }
+            self.param_names = new_params;
+
+            // Compile body
+            self.compile_expr(body)?;
+            self.emit(Instruction::Ret);
+
+            self.param_names = saved_params;
+
+            // Patch jump-if-false instructions to jump to next clause
+            if !is_last_clause {
+                let next_clause_addr = self.bytecode.len();
+
+                for jmp_idx in jmp_indices {
+                    self.bytecode[jmp_idx] = Instruction::JmpIfFalse(next_clause_addr);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
 
 
     pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
