@@ -15,8 +15,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 5 (added closures with MakeClosure, CallClosure, LoadCaptured instructions)
-    bytes.push(5);
+    // Version: 6 (added TailCall instruction for tail call optimization)
+    bytes.push(6);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -42,8 +42,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 5 {
-        return Err(format!("Unsupported bytecode version: {} (expected 5)", version));
+    if version != 6 {
+        return Err(format!("Unsupported bytecode version: {} (expected 6)", version));
     }
     pos += 1;
 
@@ -219,6 +219,11 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(36);
             write_u32(bytes, *n as u32);
         }
+        Instruction::TailCall(name, argc) => {
+            bytes.push(37);
+            write_string(bytes, name);
+            write_u32(bytes, *argc as u32);
+        }
     }
 }
 
@@ -291,6 +296,11 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         34 => Ok(Instruction::LoadCaptured(read_u32(bytes, pos)? as usize)),
         35 => Ok(Instruction::Append),
         36 => Ok(Instruction::MakeList(read_u32(bytes, pos)? as usize)),
+        37 => {
+            let name = read_string(bytes, pos)?;
+            let argc = read_u32(bytes, pos)? as usize;
+            Ok(Instruction::TailCall(name, argc))
+        }
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
