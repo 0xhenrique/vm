@@ -73,6 +73,10 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::LoadArg(idx) => format!("LoadArg({})", idx),
         Instruction::Print => "Print".to_string(),
         Instruction::Halt => "Halt".to_string(),
+        Instruction::Cons => "Cons".to_string(),
+        Instruction::Car => "Car".to_string(),
+        Instruction::Cdr => "Cdr".to_string(),
+        Instruction::IsList => "IsList".to_string(),
     }
 }
 

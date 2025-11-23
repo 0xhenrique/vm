@@ -43,6 +43,13 @@ impl Parser {
             self.parse_list()
         } else if token.text == ")" {
             Err("Unexpected closing parenthesis".to_string())
+        } else if token.text == "'" {
+            // Quote syntax: 'expr → (quote expr)
+            self.pos += 1;
+            let quoted_expr = self.parse_expr()?;
+            let quote_symbol = SourceExpr::new(LispExpr::Symbol("quote".to_string()), location.clone());
+            let quoted_list = vec![quote_symbol, quoted_expr];
+            Ok(SourceExpr::new(LispExpr::List(quoted_list), location))
         } else if token.text == "true" {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Boolean(true), location))
@@ -89,7 +96,7 @@ fn tokenize(input: &str) -> Vec<Token> {
 
     for ch in input.chars() {
         match ch {
-            '(' | ')' => {
+            '(' | ')' | '\'' => {
                 if !current.is_empty() {
                     tokens.push(Token {
                         text: current.clone(),

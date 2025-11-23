@@ -156,6 +156,13 @@ impl Repl {
         match value {
             Value::Integer(n) => n.to_string(),
             Value::Boolean(b) => b.to_string(),
+            Value::List(items) => {
+                let formatted_items: Vec<String> = items
+                    .iter()
+                    .map(|v| self.format_value(v))
+                    .collect();
+                format!("({})", formatted_items.join(" "))
+            }
         }
     }
 

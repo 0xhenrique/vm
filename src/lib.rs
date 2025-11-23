@@ -4,12 +4,14 @@ pub mod parser;
 pub mod bytecode;
 pub mod disassembler;
 pub mod repl;
+pub mod optimizer;
 
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Integer(i64),
     Boolean(bool),
+    List(Vec<Value>),
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +36,11 @@ pub enum Instruction {
     LoadArg(usize),
     Print,
     Halt,
+    // List operations
+    Cons,    // Pop two values, push cons cell (list)
+    Car,     // Pop list, push first element
+    Cdr,     // Pop list, push rest of list
+    IsList,  // Pop value, push boolean indicating if it's a list
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -369,10 +376,7 @@ impl VM {
             }
             Instruction::Print => {
                 let value = self.value_stack.pop().expect("Stack underflow");
-                match value {
-                    Value::Integer(n) => println!("{}", n),
-                    Value::Boolean(b) => println!("{}", b),
-                }
+                println!("{}", Self::format_value(&value));
                 self.instruction_pointer += 1;
             }
             Instruction::Ret => {
@@ -408,9 +412,74 @@ impl VM {
             Instruction::Halt => {
                 self.halted = true;
             }
+            Instruction::Cons => {
+                let second = self.value_stack.pop().expect("Stack underflow");
+                let first = self.value_stack.pop().expect("Stack underflow");
+
+                // cons creates a list by prepending first to second
+                // (cons 1 '(2 3)) -> '(1 2 3)
+                // (cons 1 2) -> '(1 2) [improper list, to be represented as proper list]
+                let mut new_list = vec![first];
+                match second {
+                    Value::List(mut items) => {
+                        new_list.append(&mut items);
+                    }
+                    other => {
+                        new_list.push(other);
+                    }
+                }
+                self.value_stack.push(Value::List(new_list));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Car => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            panic!("car: cannot take car of empty list");
+                        }
+                        self.value_stack.push(items[0].clone());
+                    }
+                    _ => panic!("car: expected list"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Cdr => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            panic!("cdr: cannot take cdr of empty list");
+                        }
+                        let rest = items[1..].to_vec();
+                        self.value_stack.push(Value::List(rest));
+                    }
+                    _ => panic!("cdr: expected list"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsList => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                let is_list = matches!(value, Value::List(_));
+                self.value_stack.push(Value::Boolean(is_list));
+                self.instruction_pointer += 1;
+            }
         }
     }
 
+    fn format_value(value: &Value) -> String {
+        match value {
+            Value::Integer(n) => n.to_string(),
+            Value::Boolean(b) => b.to_string(),
+            Value::List(items) => {
+                let formatted_items: Vec<String> = items
+                    .iter()
+                    .map(|v| Self::format_value(v))
+                    .collect();
+                format!("({})", formatted_items.join(" "))
+            }
+        }
+    }
 
     pub fn run(&mut self) {
         while !self.halted {
@@ -501,59 +570,89 @@ impl Compiler {
                 match operator {
                     // Arithmetic operators: +, -, *, /
                     "+" => {
-                        if items.len() != 3 {
+                        if items.len() < 3 {
                             return Err(CompileError::new(
-                                "+ expects exactly 2 arguments".to_string(),
+                                "+ expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
                             ));
                         }
+                        // Compile first argument
                         self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
-                        self.emit(Instruction::Add);
+
+                        // For each remaining argument, compile it and emit Add
+                        // This transforms (+ 1 2 3 4) into (+ 1 (+ 2 (+ 3 4)))
+                        for i in 2..items.len() {
+                            self.compile_expr(&items[i])?;
+                            self.emit(Instruction::Add);
+                        }
                     }
                     "-" => {
-                        if items.len() != 3 {
+                        if items.len() < 3 {
                             return Err(CompileError::new(
-                                "- expects exactly 2 arguments".to_string(),
+                                "- expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
                             ));
                         }
+                        // Compile first argument
                         self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
-                        self.emit(Instruction::Sub);
+
+                        // For each remaining argument, compile it and emit Sub
+                        // This does left-associative subtraction: (- 10 2 3) = (- (- 10 2) 3) = 5
+                        for i in 2..items.len() {
+                            self.compile_expr(&items[i])?;
+                            self.emit(Instruction::Sub);
+                        }
                     }
                     "*" => {
-                        if items.len() != 3 {
+                        if items.len() < 3 {
                             return Err(CompileError::new(
-                                "* expects exactly 2 arguments".to_string(),
+                                "* expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
                             ));
                         }
+                        // Compile first argument
                         self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
-                        self.emit(Instruction::Mul);
+
+                        // For each remaining argument, compile it and emit Mul
+                        // This transforms (* 2 3 4) into (* 2 (* 3 4)) = (* 2 12) = 24
+                        for i in 2..items.len() {
+                            self.compile_expr(&items[i])?;
+                            self.emit(Instruction::Mul);
+                        }
                     }
                     "/" => {
-                        if items.len() != 3 {
+                        if items.len() < 3 {
                             return Err(CompileError::new(
-                                "/ expects exactly 2 arguments".to_string(),
+                                "/ expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
                             ));
                         }
+                        // Compile first argument
                         self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
-                        self.emit(Instruction::Div);
+
+                        // For each remaining argument, compile it and emit Div
+                        // This transforms (/ 20 2 2) into (/ (/ 20 2) 2) = (/ 10 2) = 5
+                        for i in 2..items.len() {
+                            self.compile_expr(&items[i])?;
+                            self.emit(Instruction::Div);
+                        }
                     }
                     "%" => {
-                        if items.len() != 3 {
+                        if items.len() < 3 {
                             return Err(CompileError::new(
-                                "% expects exactly 2 arguments".to_string(),
+                                "% expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
                             ));
                         }
+                        // Compile first argument
                         self.compile_expr(&items[1])?;
-                        self.compile_expr(&items[2])?;
-                        self.emit(Instruction::Mod);
+
+                        // For each remaining argument, compile it and emit Mod
+                        // This transforms (% 10 3 2) into (% (% 10 3) 2) = (% 1 2) = 1
+                        for i in 2..items.len() {
+                            self.compile_expr(&items[i])?;
+                            self.emit(Instruction::Mod);
+                        }
                     }
                     "neg" => {
                         if items.len() != 2 {
@@ -685,6 +784,62 @@ impl Compiler {
                         self.emit(Instruction::Print);
                     }
 
+                    // Quote: (quote expr) - return expr unevaluated as a list
+                    "quote" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "quote expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        // Convert the quoted expression to a runtime Value
+                        let value = self.expr_to_value(&items[1])?;
+                        self.emit(Instruction::Push(value));
+                    }
+
+                    // List operations
+                    "cons" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "cons expects exactly 2 arguments".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.compile_expr(&items[2])?;
+                        self.emit(Instruction::Cons);
+                    }
+                    "car" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "car expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::Car);
+                    }
+                    "cdr" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "cdr expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::Cdr);
+                    }
+                    "list?" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "list? expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::IsList);
+                    }
+
                     // User-defined function call
                     _ => {
                         // Compile all arguments
@@ -702,6 +857,30 @@ impl Compiler {
         Ok(start_address)
     }
 
+    // Convert a SourceExpr to a runtime Value (for quote)
+    fn expr_to_value(&self, expr: &SourceExpr) -> Result<Value, CompileError> {
+        match &expr.expr {
+            LispExpr::Number(n) => Ok(Value::Integer(*n)),
+            LispExpr::Boolean(b) => Ok(Value::Boolean(*b)),
+            LispExpr::Symbol(s) => {
+                // Symbols in quoted expressions become list values
+                // Representing symbols as single-character strings wrapped in a list
+                // @TODO: maybe it would be better to add a Symbol value type
+                // for simplicity, just error on symbols for now
+                Err(CompileError::new(
+                    format!("Symbols in quotes not yet supported: '{}'", s),
+                    expr.location.clone(),
+                ))
+            }
+            LispExpr::List(items) => {
+                let mut values = Vec::new();
+                for item in items {
+                    values.push(self.expr_to_value(item)?);
+                }
+                Ok(Value::List(values))
+            }
+        }
+    }
 
     fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
         // Assert expr is (defun name (params...) body)

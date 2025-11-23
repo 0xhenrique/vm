@@ -190,7 +190,7 @@ fn test_compile_error_wrong_arg_count() {
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.message.contains("expects exactly 2 arguments"));
+    assert!(err.message.contains("at least 2 arguments"));
 }
 
 #[test]
@@ -211,4 +211,116 @@ fn test_compile_multiple_functions() {
     assert!(functions.contains_key("add"));
     assert!(functions.contains_key("mul"));
     assert!(functions.contains_key("square"));
+}
+
+#[test]
+fn test_compile_variadic_addition() {
+    let mut parser = Parser::new("(+ 1 2 3 4)");
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (_, main) = compiler.compile_program(&exprs).unwrap();
+
+    // Should have: Push(1), Push(2), Add, Push(3), Add, Push(4), Add, Halt
+    assert_eq!(main.len(), 8);
+    assert!(matches!(main[0], Instruction::Push(Value::Integer(1))));
+    assert!(matches!(main[1], Instruction::Push(Value::Integer(2))));
+    assert!(matches!(main[2], Instruction::Add));
+    assert!(matches!(main[3], Instruction::Push(Value::Integer(3))));
+    assert!(matches!(main[4], Instruction::Add));
+    assert!(matches!(main[5], Instruction::Push(Value::Integer(4))));
+    assert!(matches!(main[6], Instruction::Add));
+    assert!(matches!(main[7], Instruction::Halt));
+}
+
+#[test]
+fn test_compile_variadic_multiplication() {
+    let mut parser = Parser::new("(* 2 3 4)");
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (_, main) = compiler.compile_program(&exprs).unwrap();
+
+    // Should have: Push(2), Push(3), Mul, Push(4), Mul, Halt
+    assert_eq!(main.len(), 6);
+    assert!(matches!(main[0], Instruction::Push(Value::Integer(2))));
+    assert!(matches!(main[1], Instruction::Push(Value::Integer(3))));
+    assert!(matches!(main[2], Instruction::Mul));
+    assert!(matches!(main[3], Instruction::Push(Value::Integer(4))));
+    assert!(matches!(main[4], Instruction::Mul));
+    assert!(matches!(main[5], Instruction::Halt));
+}
+
+#[test]
+fn test_compile_variadic_subtraction() {
+    let mut parser = Parser::new("(- 10 2 3)");
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (_, main) = compiler.compile_program(&exprs).unwrap();
+
+    // Should have: Push(10), Push(2), Sub, Push(3), Sub, Halt
+    assert_eq!(main.len(), 6);
+    assert!(matches!(main[0], Instruction::Push(Value::Integer(10))));
+    assert!(matches!(main[1], Instruction::Push(Value::Integer(2))));
+    assert!(matches!(main[2], Instruction::Sub));
+    assert!(matches!(main[3], Instruction::Push(Value::Integer(3))));
+    assert!(matches!(main[4], Instruction::Sub));
+    assert!(matches!(main[5], Instruction::Halt));
+}
+
+#[test]
+fn test_compile_variadic_division() {
+    let mut parser = Parser::new("(/ 20 2 5)");
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (_, main) = compiler.compile_program(&exprs).unwrap();
+
+    // Should have: Push(20), Push(2), Div, Push(5), Div, Halt
+    assert_eq!(main.len(), 6);
+    assert!(matches!(main[0], Instruction::Push(Value::Integer(20))));
+    assert!(matches!(main[1], Instruction::Push(Value::Integer(2))));
+    assert!(matches!(main[2], Instruction::Div));
+    assert!(matches!(main[3], Instruction::Push(Value::Integer(5))));
+    assert!(matches!(main[4], Instruction::Div));
+    assert!(matches!(main[5], Instruction::Halt));
+}
+
+#[test]
+fn test_compile_variadic_modulo() {
+    let mut parser = Parser::new("(% 10 4 2)");
+    let exprs = parser.parse_all().unwrap();
+
+    let mut compiler = Compiler::new();
+    let (_, main) = compiler.compile_program(&exprs).unwrap();
+
+    // Should have: Push(10), Push(4), Mod, Push(2), Mod, Halt
+    assert_eq!(main.len(), 6);
+    assert!(matches!(main[0], Instruction::Push(Value::Integer(10))));
+    assert!(matches!(main[1], Instruction::Push(Value::Integer(4))));
+    assert!(matches!(main[2], Instruction::Mod));
+    assert!(matches!(main[3], Instruction::Push(Value::Integer(2))));
+    assert!(matches!(main[4], Instruction::Mod));
+    assert!(matches!(main[5], Instruction::Halt));
+}
+
+#[test]
+fn test_compile_error_single_arg_arithmetic() {
+    // Test that operators still require at least 2 arguments
+    let operators = vec!["+", "-", "*", "/", "%"];
+
+    for op in operators {
+        let source = format!("({} 1)", op);
+        let mut parser = Parser::new(&source);
+        let exprs = parser.parse_all().unwrap();
+
+        let mut compiler = Compiler::new();
+        let result = compiler.compile_program(&exprs);
+
+        assert!(result.is_err(), "Expected error for {} with 1 argument", op);
+        let err = result.unwrap_err();
+        assert!(err.message.contains("at least 2 arguments"),
+                "Error message for {} should mention 'at least 2 arguments'", op);
+    }
 }

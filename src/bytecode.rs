@@ -15,8 +15,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 1
-    bytes.push(1);
+    // Version: 2 (added list support)
+    bytes.push(2);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -42,8 +42,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 1 {
-        return Err(format!("Unsupported bytecode version: {}", version));
+    if version != 2 {
+        return Err(format!("Unsupported bytecode version: {} (expected 2)", version));
     }
     pos += 1;
 
@@ -166,6 +166,10 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::Gte => bytes.push(17),
         Instruction::Eq => bytes.push(18),
         Instruction::Neq => bytes.push(19),
+        Instruction::Cons => bytes.push(20),
+        Instruction::Car => bytes.push(21),
+        Instruction::Cdr => bytes.push(22),
+        Instruction::IsList => bytes.push(23),
     }
 }
 
@@ -201,6 +205,10 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         17 => Ok(Instruction::Gte),
         18 => Ok(Instruction::Eq),
         19 => Ok(Instruction::Neq),
+        20 => Ok(Instruction::Cons),
+        21 => Ok(Instruction::Car),
+        22 => Ok(Instruction::Cdr),
+        23 => Ok(Instruction::IsList),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -214,6 +222,13 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
         Value::Boolean(b) => {
             bytes.push(1);
             bytes.push(if *b { 1 } else { 0 });
+        }
+        Value::List(items) => {
+            bytes.push(2);
+            write_u32(bytes, items.len() as u32);
+            for item in items {
+                write_value(bytes, item);
+            }
         }
     }
 }
@@ -250,6 +265,14 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             let b = bytes[*pos] != 0;
             *pos += 1;
             Ok(Value::Boolean(b))
+        }
+        2 => {
+            let len = read_u32(bytes, pos)? as usize;
+            let mut items = Vec::new();
+            for _ in 0..len {
+                items.push(read_value(bytes, pos)?);
+            }
+            Ok(Value::List(items))
         }
         _ => Err(format!("Unknown value tag: {}", tag)),
     }
