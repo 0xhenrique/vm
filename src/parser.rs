@@ -50,6 +50,35 @@ impl Parser {
             let quote_symbol = SourceExpr::new(LispExpr::Symbol("quote".to_string()), location.clone());
             let quoted_list = vec![quote_symbol, quoted_expr];
             Ok(SourceExpr::new(LispExpr::List(quoted_list), location))
+        } else if token.text == "`" {
+            // Quasiquote syntax: `expr → (quasiquote expr)
+            self.pos += 1;
+            let quoted_expr = self.parse_expr()?;
+            let quasiquote_symbol = SourceExpr::new(LispExpr::Symbol("quasiquote".to_string()), location.clone());
+            let quoted_list = vec![quasiquote_symbol, quoted_expr];
+            Ok(SourceExpr::new(LispExpr::List(quoted_list), location))
+        } else if token.text == "," {
+            // Unquote or unquote-splicing
+            self.pos += 1;
+
+            // Check if next token is @ for unquote-splicing
+            if self.pos < self.tokens.len() && self.tokens[self.pos].text == "@" {
+                // Unquote-splicing: ,@expr → (unquote-splicing expr)
+                self.pos += 1;
+                let unquoted_expr = self.parse_expr()?;
+                let unquote_splicing_symbol = SourceExpr::new(
+                    LispExpr::Symbol("unquote-splicing".to_string()),
+                    location.clone()
+                );
+                let unquoted_list = vec![unquote_splicing_symbol, unquoted_expr];
+                Ok(SourceExpr::new(LispExpr::List(unquoted_list), location))
+            } else {
+                // Unquote: ,expr → (unquote expr)
+                let unquoted_expr = self.parse_expr()?;
+                let unquote_symbol = SourceExpr::new(LispExpr::Symbol("unquote".to_string()), location.clone());
+                let unquoted_list = vec![unquote_symbol, unquoted_expr];
+                Ok(SourceExpr::new(LispExpr::List(unquoted_list), location))
+            }
         } else if token.text == "true" {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Boolean(true), location))
@@ -168,7 +197,7 @@ fn tokenize(input: &str) -> Vec<Token> {
                     string_start_column = column;
                     column += 1;
                 }
-                '(' | ')' | '\'' => {
+                '(' | ')' | '\'' | '`' | ',' | '@' => {
                     if !current.is_empty() {
                         tokens.push(Token {
                             text: current.clone(),
