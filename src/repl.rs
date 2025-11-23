@@ -165,6 +165,9 @@ impl Repl {
             }
             Value::Symbol(s) => s.clone(),
             Value::String(s) => format!("\"{}\"", s),
+            Value::Closure { params, .. } => {
+                format!("<closure ({})>", params.join(" "))
+            }
         }
     }
 
