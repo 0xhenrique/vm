@@ -39,6 +39,7 @@ pub enum Instruction {
     GetLocal(usize), // Load from value stack at position (from bottom)
     PopN(usize),     // Pop N values from the stack
     Slide(usize),    // Pop top value, pop N values, push top value back (cleanup let bindings)
+    CheckArity(usize, usize), // Check if frame.locals.len() == expected_arity, jump to addr if not
     Print,
     Halt,
     // List operations
@@ -400,6 +401,17 @@ impl VM {
                 }
                 self.value_stack.push(result);
                 self.instruction_pointer += 1;
+            }
+            Instruction::CheckArity(expected_arity, jump_addr) => {
+                // Check if current frame has the expected number of arguments
+                let frame = self.call_stack.last().expect("No frame for arity check");
+                if frame.locals.len() != expected_arity {
+                    // Arity doesn't match, jump to next clause
+                    self.instruction_pointer = jump_addr;
+                } else {
+                    // Arity matches, continue
+                    self.instruction_pointer += 1;
+                }
             }
             Instruction::Print => {
                 let value = self.value_stack.pop().expect("Stack underflow");
@@ -1267,16 +1279,11 @@ impl Compiler {
             }
         }
 
-        // Determine arity (all clauses must have same number of patterns)
-        let arity = parsed_clauses[0].0.len();
-        for (pattern, _) in &parsed_clauses {
-            if pattern.len() != arity {
-                return Err(CompileError::new(
-                    format!("All clauses must have same arity (expected {}, got {})", arity, pattern.len()),
-                    name_location.clone(),
-                ));
-            }
-        }
+        // Find maximum arity among all clauses (for param_names setup)
+        let max_arity = parsed_clauses.iter()
+            .map(|(patterns, _)| patterns.len())
+            .max()
+            .unwrap_or(0);
 
         // Save current compilation context
         let saved_bytecode = std::mem::take(&mut self.bytecode);
@@ -1285,11 +1292,11 @@ impl Compiler {
 
         // Set up new context for function
         self.bytecode = Vec::new();
-        self.param_names = (0..arity).map(|i| format!("__arg{}", i)).collect();
+        self.param_names = (0..max_arity).map(|i| format!("__arg{}", i)).collect();
         self.instruction_address = 0;
 
         // Compile pattern matching dispatch
-        self.compile_pattern_dispatch(&parsed_clauses, arity, name_location)?;
+        self.compile_pattern_dispatch(&parsed_clauses)?;
 
         // Emit error if no clause matched
         // For now, just emit a halt (will panic at runtime)
@@ -1452,11 +1459,20 @@ impl Compiler {
     fn compile_pattern_dispatch(
         &mut self,
         clauses: &[(&Vec<SourceExpr>, &SourceExpr)],
-        _arity: usize,
-        _location: &Location,
     ) -> Result<(), CompileError> {
         for (i, (patterns, body)) in clauses.iter().enumerate() {
             let is_last_clause = i == clauses.len() - 1;
+
+            // Emit arity check at the start of this clause
+            let arity = patterns.len();
+            let arity_check_idx = if !is_last_clause {
+                let idx = self.bytecode.len();
+                self.emit(Instruction::CheckArity(arity, 0)); // Placeholder jump address
+                Some(idx)
+            } else {
+                // Last clause doesn't need arity check - if we get here, no other clause matched
+                None
+            };
 
             // For each pattern in this clause, generate matching code
             let mut bindings: Vec<(String, ValueLocation)> = Vec::new();
@@ -1488,10 +1504,16 @@ impl Compiler {
             // Restore bindings
             self.pattern_bindings = saved_bindings;
 
-            // Patch jump-if-false instructions to jump to next clause
+            // Patch jump instructions to jump to next clause
             if !is_last_clause {
                 let next_clause_addr = self.bytecode.len();
 
+                // Patch arity check jump
+                if let Some(idx) = arity_check_idx {
+                    self.bytecode[idx] = Instruction::CheckArity(arity, next_clause_addr);
+                }
+
+                // Patch pattern match jumps
                 for jmp_idx in jmp_indices {
                     self.bytecode[jmp_idx] = Instruction::JmpIfFalse(next_clause_addr);
                 }

@@ -84,6 +84,7 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::GetLocal(pos) => format!("GetLocal({})", pos),
         Instruction::PopN(n) => format!("PopN({})", n),
         Instruction::Slide(n) => format!("Slide({})", n),
+        Instruction::CheckArity(arity, addr) => format!("CheckArity({}, {})", arity, addr),
     }
 }
 
