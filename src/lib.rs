@@ -39,6 +39,7 @@ pub enum Instruction {
     JmpIfFalse(usize),
     Jmp(usize),
     Call(String, usize),
+    TailCall(String, usize), // Tail call: reuse current frame instead of pushing new one
     Ret,
     LoadArg(usize),
     GetLocal(usize), // Load from value stack at position (from bottom)
@@ -532,6 +533,42 @@ impl VM {
                 self.current_bytecode = fn_bytecode;
                 self.instruction_pointer = 0;
             }
+            Instruction::TailCall(fn_name, arg_count) => {
+                let fn_bytecode = self.functions.get(&fn_name)
+                    .expect(&format!("Function '{}' not found", fn_name))
+                    .clone();
+
+                // Pop arguments from value stack in reverse order
+                let mut args = Vec::new();
+                for _ in 0..arg_count {
+                    args.push(self.value_stack.pop().expect("Stack underflow"));
+                }
+                args.reverse();
+
+                // Reuse current frame instead of pushing a new one
+                // This is the key to tail call optimization!
+                if let Some(frame) = self.call_stack.last_mut() {
+                    // Replace the locals (arguments) in the current frame
+                    frame.locals = args;
+                    // Update function name for stack traces
+                    frame.function_name = fn_name.clone();
+                    // Keep the same return address and return bytecode
+                } else {
+                    // No frame exists (top-level call), treat as regular call
+                    let frame = Frame {
+                        return_address: self.instruction_pointer + 1,
+                        locals: args,
+                        return_bytecode: self.current_bytecode.clone(),
+                        function_name: fn_name.clone(),
+                        captured: Vec::new(),
+                    };
+                    self.call_stack.push(frame);
+                }
+
+                // Switch to function bytecode
+                self.current_bytecode = fn_bytecode;
+                self.instruction_pointer = 0;
+            }
             Instruction::Halt => {
                 self.halted = true;
             }
@@ -740,6 +777,7 @@ pub struct Compiler {
     pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
     local_bindings: HashMap<String, ValueLocation>, // Track let-bound variables
     stack_depth: usize, // Track current stack depth for let bindings
+    in_tail_position: bool, // Track if current expression is in tail position (for TCO)
 }
 
 impl Compiler {
@@ -754,6 +792,7 @@ impl Compiler {
             pattern_bindings: HashMap::new(),
             local_bindings: HashMap::new(),
             stack_depth: 0,
+            in_tail_position: false,
         }
     }
 
@@ -831,6 +870,10 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        // Arguments to + are not in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+
                         // Compile first argument
                         self.compile_expr(&items[1])?;
 
@@ -840,6 +883,9 @@ impl Compiler {
                             self.compile_expr(&items[i])?;
                             self.emit(Instruction::Add);
                         }
+
+                        // Restore tail position
+                        self.in_tail_position = saved_tail;
                     }
                     "-" => {
                         if items.len() < 3 {
@@ -848,6 +894,10 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        // Arguments are not in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+
                         // Compile first argument
                         self.compile_expr(&items[1])?;
 
@@ -857,6 +907,8 @@ impl Compiler {
                             self.compile_expr(&items[i])?;
                             self.emit(Instruction::Sub);
                         }
+
+                        self.in_tail_position = saved_tail;
                     }
                     "*" => {
                         if items.len() < 3 {
@@ -865,6 +917,10 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        // Arguments are not in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+
                         // Compile first argument
                         self.compile_expr(&items[1])?;
 
@@ -874,6 +930,8 @@ impl Compiler {
                             self.compile_expr(&items[i])?;
                             self.emit(Instruction::Mul);
                         }
+
+                        self.in_tail_position = saved_tail;
                     }
                     "/" => {
                         if items.len() < 3 {
@@ -882,6 +940,10 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        // Arguments are not in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+
                         // Compile first argument
                         self.compile_expr(&items[1])?;
 
@@ -891,6 +953,8 @@ impl Compiler {
                             self.compile_expr(&items[i])?;
                             self.emit(Instruction::Div);
                         }
+
+                        self.in_tail_position = saved_tail;
                     }
                     "%" => {
                         if items.len() < 3 {
@@ -899,6 +963,10 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        // Arguments are not in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+
                         // Compile first argument
                         self.compile_expr(&items[1])?;
 
@@ -908,6 +976,8 @@ impl Compiler {
                             self.compile_expr(&items[i])?;
                             self.emit(Instruction::Mod);
                         }
+
+                        self.in_tail_position = saved_tail;
                     }
                     "neg" => {
                         if items.len() != 2 {
@@ -916,8 +986,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::Neg);
+                        self.in_tail_position = saved_tail;
                     }
 
                     // Comparison operators
@@ -928,9 +1001,12 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.compile_expr(&items[2])?;
                         self.emit(Instruction::Leq);
+                        self.in_tail_position = saved_tail;
                     }
                     "<" => {
                         if items.len() != 3 {
@@ -997,14 +1073,19 @@ impl Compiler {
                             ));
                         }
 
-                        // Compile condition
+                        // Save tail position for branches (they inherit from if)
+                        let saved_tail = self.in_tail_position;
+
+                        // Compile condition (not in tail position)
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
 
                         // Emit JmpIfFalse with placeholder address
                         let jmp_if_false_index = self.bytecode.len();
                         self.emit(Instruction::JmpIfFalse(0)); // placeholder
 
-                        // Compile then-branch
+                        // Compile then-branch (inherits tail position from if)
+                        self.in_tail_position = saved_tail;
                         self.compile_expr(&items[2])?;
 
                         // Emit Jmp to skip else-branch, with placeholder address
@@ -1017,7 +1098,8 @@ impl Compiler {
                         // Patch the JmpIfFalse to jump here
                         self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(else_addr);
 
-                        // Compile else-branch
+                        // Compile else-branch (inherits tail position from if)
+                        self.in_tail_position = saved_tail;
                         self.compile_expr(&items[3])?;
 
                         // Record end address
@@ -1025,6 +1107,9 @@ impl Compiler {
 
                         // Patch the Jmp to jump to end
                         self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+                        // Restore tail position
+                        self.in_tail_position = saved_tail;
                     }
 
                     // Print: (print expr)
@@ -1094,9 +1179,12 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.compile_expr(&items[2])?;
                         self.emit(Instruction::Cons);
+                        self.in_tail_position = saved_tail;
                     }
                     "car" => {
                         if items.len() != 2 {
@@ -1105,8 +1193,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::Car);
+                        self.in_tail_position = saved_tail;
                     }
                     "cdr" => {
                         if items.len() != 2 {
@@ -1115,8 +1206,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::Cdr);
+                        self.in_tail_position = saved_tail;
                     }
                     "list?" => {
                         if items.len() != 2 {
@@ -1125,8 +1219,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::IsList);
+                        self.in_tail_position = saved_tail;
                     }
 
                     // String/Symbol operations
@@ -1137,8 +1234,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::IsString);
+                        self.in_tail_position = saved_tail;
                     }
                     "symbol?" => {
                         if items.len() != 2 {
@@ -1147,8 +1247,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::IsSymbol);
+                        self.in_tail_position = saved_tail;
                     }
                     "symbol->string" => {
                         if items.len() != 2 {
@@ -1157,8 +1260,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::SymbolToString);
+                        self.in_tail_position = saved_tail;
                     }
                     "string->symbol" => {
                         if items.len() != 2 {
@@ -1167,8 +1273,11 @@ impl Compiler {
                                 expr.location.clone(),
                             ));
                         }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_expr(&items[1])?;
                         self.emit(Instruction::StringToSymbol);
+                        self.in_tail_position = saved_tail;
                     }
 
                     // User-defined function call or closure variable or macro
@@ -1188,6 +1297,10 @@ impl Compiler {
 
                             if is_variable {
                                 // It's a variable - load it as a closure and use CallClosure
+                                let saved_tail = self.in_tail_position;
+
+                                // Closure and arguments are not in tail position
+                                self.in_tail_position = false;
                                 self.compile_variable_load(operator)?;
 
                                 // Compile all arguments
@@ -1198,13 +1311,28 @@ impl Compiler {
 
                                 // Call the closure
                                 self.emit(Instruction::CallClosure(arg_count));
+
+                                self.in_tail_position = saved_tail;
                             } else {
                                 // It's a regular function call
                                 let arg_count = items.len() - 1;
+                                let is_tail_call = self.in_tail_position;
+
+                                // Arguments are not in tail position
+                                self.in_tail_position = false;
                                 for i in 1..items.len() {
                                     self.compile_expr(&items[i])?;
                                 }
-                                self.emit(Instruction::Call(operator.to_string(), arg_count));
+
+                                // Emit TailCall if in tail position, otherwise Call
+                                if is_tail_call {
+                                    self.emit(Instruction::TailCall(operator.to_string(), arg_count));
+                                } else {
+                                    self.emit(Instruction::Call(operator.to_string(), arg_count));
+                                }
+
+                                // Restore tail position
+                                self.in_tail_position = is_tail_call;
                             }
                         }
                     }
@@ -1362,11 +1490,13 @@ impl Compiler {
         let saved_bytecode = std::mem::take(&mut self.bytecode);
         let saved_params = std::mem::take(&mut self.param_names);
         let saved_address = self.instruction_address;
+        let saved_tail_position = self.in_tail_position;
 
         // Set up new context for function
         self.bytecode = Vec::new();
         self.param_names = param_names;
         self.instruction_address = 0;
+        self.in_tail_position = true; // Function body is in tail position
 
         // Compile function body
         self.compile_expr(body_expr)?;
@@ -1382,6 +1512,7 @@ impl Compiler {
         self.bytecode = saved_bytecode;
         self.param_names = saved_params;
         self.instruction_address = saved_address;
+        self.in_tail_position = saved_tail_position;
 
         Ok(())
     }
@@ -1469,11 +1600,13 @@ impl Compiler {
         let saved_bytecode = std::mem::take(&mut self.bytecode);
         let saved_params = std::mem::take(&mut self.param_names);
         let saved_address = self.instruction_address;
+        let saved_tail_position = self.in_tail_position;
 
         // Set up new context for function
         self.bytecode = Vec::new();
         self.param_names = (0..max_arity).map(|i| format!("__arg{}", i)).collect();
         self.instruction_address = 0;
+        self.in_tail_position = true; // Pattern clause bodies are in tail position
 
         // Compile pattern matching dispatch
         self.compile_pattern_dispatch(&parsed_clauses)?;
@@ -1490,6 +1623,7 @@ impl Compiler {
         self.bytecode = saved_bytecode;
         self.param_names = saved_params;
         self.instruction_address = saved_address;
+        self.in_tail_position = saved_tail_position;
 
         Ok(())
     }
@@ -1748,8 +1882,15 @@ impl Compiler {
             let pattern = &binding_pair[0];
             let value_expr = &binding_pair[1];
 
+            // Save tail position and set to false for binding values
+            let saved_tail = self.in_tail_position;
+            self.in_tail_position = false;
+
             // Compile the value expression (pushes result onto stack)
             self.compile_expr(value_expr)?;
+
+            // Restore tail position
+            self.in_tail_position = saved_tail;
 
             // The value is now on the stack at position stack_depth
             let value_position = self.stack_depth;
@@ -1760,7 +1901,7 @@ impl Compiler {
             self.bind_pattern_to_local(pattern, value_position)?;
         }
 
-        // Compile body with bindings available
+        // Compile body with bindings available (body inherits tail position from let)
         self.compile_expr(body_expr)?;
 
         // Clean up let bindings from stack
@@ -2043,6 +2184,7 @@ impl Compiler {
         let saved_pattern_bindings = self.pattern_bindings.clone();
         let saved_address = self.instruction_address;
         let saved_stack_depth = self.stack_depth;
+        let saved_tail_position = self.in_tail_position;
 
         // Set up new context for closure body
         self.bytecode = Vec::new();
@@ -2051,6 +2193,7 @@ impl Compiler {
         self.local_bindings.clear();
         self.pattern_bindings.clear();
         self.stack_depth = 0;
+        self.in_tail_position = true; // Lambda body is in tail position
 
         // Set up captured variables as "LoadCaptured" locations
         for (i, var_name) in free_vars.iter().enumerate() {
@@ -2071,6 +2214,7 @@ impl Compiler {
         self.pattern_bindings = saved_pattern_bindings;
         self.instruction_address = saved_address;
         self.stack_depth = saved_stack_depth;
+        self.in_tail_position = saved_tail_position;
 
         // Emit code to push captured variable values onto stack
         for var_name in &free_vars {

@@ -69,6 +69,7 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::JmpIfFalse(addr) => format!("JmpIfFalse({})", addr),
         Instruction::Jmp(addr) => format!("Jmp({})", addr),
         Instruction::Call(name, argc) => format!("Call(\"{}\", {})", name, argc),
+        Instruction::TailCall(name, argc) => format!("TailCall(\"{}\", {})", name, argc),
         Instruction::Ret => "Ret".to_string(),
         Instruction::LoadArg(idx) => format!("LoadArg({})", idx),
         Instruction::Print => "Print".to_string(),
