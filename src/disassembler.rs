@@ -93,6 +93,8 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::LoadCaptured(idx) => format!("LoadCaptured({})", idx),
         Instruction::Append => "Append".to_string(),
         Instruction::MakeList(n) => format!("MakeList({})", n),
+        Instruction::LoadGlobal(name) => format!("LoadGlobal(\"{}\")", name),
+        Instruction::StoreGlobal(name) => format!("StoreGlobal(\"{}\")", name),
     }
 }
 

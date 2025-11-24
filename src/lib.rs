@@ -64,6 +64,9 @@ pub enum Instruction {
     // List manipulation
     Append,         // Pop two lists, push their concatenation (second appended to first)
     MakeList(usize), // Pop N values from stack and create a list from them (in order)
+    // Global variables
+    LoadGlobal(String),  // Push value of global variable onto stack
+    StoreGlobal(String), // Pop value from stack and store in global variable
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -213,6 +216,7 @@ pub struct VM {
     pub functions: HashMap<String, Vec<Instruction>>,
     pub current_bytecode: Vec<Instruction>,
     pub halted: bool,
+    pub global_vars: HashMap<String, Value>, // Global variables
 }
 
 impl VM {
@@ -225,6 +229,7 @@ impl VM {
             functions: HashMap::new(),
             current_bytecode: Vec::new(),
             halted: false,
+            global_vars: HashMap::new(),
         }
     }
 
@@ -681,6 +686,18 @@ impl VM {
                 self.value_stack.push(Value::List(items));
                 self.instruction_pointer += 1;
             }
+            Instruction::LoadGlobal(name) => {
+                let value = self.global_vars.get(&name)
+                    .expect(&format!("Undefined global variable: {}", name))
+                    .clone();
+                self.value_stack.push(value);
+                self.instruction_pointer += 1;
+            }
+            Instruction::StoreGlobal(name) => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                self.global_vars.insert(name, value);
+                self.instruction_pointer += 1;
+            }
         }
     }
 
@@ -772,6 +789,7 @@ pub struct Compiler {
     bytecode: Vec<Instruction>,
     functions: HashMap<String, Vec<Instruction>>,
     macros: HashMap<String, MacroDef>, // Macro definitions
+    global_vars: HashMap<String, bool>, // Track global variables (value is mutable flag)
     instruction_address: usize,
     param_names: Vec<String>, // Track parameter names for LoadArg
     pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
@@ -787,6 +805,7 @@ impl Compiler {
             bytecode: Vec::new(),
             functions: HashMap::new(),
             macros: HashMap::new(),
+            global_vars: HashMap::new(),
             instruction_address: 0,
             param_names: Vec::new(),
             pattern_bindings: HashMap::new(),
@@ -840,6 +859,9 @@ impl Compiler {
                     } else if let Some(idx) = self.param_names.iter().position(|p| p == s) {
                         // Check if this symbol is a parameter
                         self.emit(Instruction::LoadArg(idx));
+                    } else if self.global_vars.contains_key(s) {
+                        // Check if this is a global variable
+                        self.emit(Instruction::LoadGlobal(s.clone()));
                     } else {
                         return Err(CompileError::new(
                             format!("Undefined variable '{}'", s),
@@ -1394,6 +1416,50 @@ impl Compiler {
                 }
             }
         }
+    }
+
+    fn compile_global_var(&mut self, expr: &SourceExpr, is_const: bool) -> Result<(), CompileError> {
+        let items = match &expr.expr {
+            LispExpr::List(items) => items,
+            _ => {
+                return Err(CompileError::new(
+                    format!("{} expects a list", if is_const { "defconst" } else { "defvar" }),
+                    expr.location.clone(),
+                ));
+            }
+        };
+
+        // Check length: (defvar name value)
+        if items.len() != 3 {
+            return Err(CompileError::new(
+                format!("{} expects exactly: ({} name value)",
+                    if is_const { "defconst" } else { "defvar" },
+                    if is_const { "defconst" } else { "defvar" }),
+                expr.location.clone(),
+            ));
+        }
+
+        // Extract variable name
+        let var_name = match &items[1].expr {
+            LispExpr::Symbol(s) => s.clone(),
+            _ => {
+                return Err(CompileError::new(
+                    "Variable name must be a symbol".to_string(),
+                    items[1].location.clone(),
+                ));
+            }
+        };
+
+        // Register as global variable (is_const flag indicates if mutable)
+        self.global_vars.insert(var_name.clone(), !is_const);
+
+        // Compile the value expression
+        self.compile_expr(&items[2])?;
+
+        // Emit StoreGlobal to store the value
+        self.emit(Instruction::StoreGlobal(var_name));
+
+        Ok(())
     }
 
         fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
@@ -2550,7 +2616,7 @@ impl Compiler {
 
 
     pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
-        // First pass: compile all defun and defmacro expressions
+        // First pass: compile all defun, defmacro, defvar, and defconst expressions
         for expr in exprs {
             if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
@@ -2559,18 +2625,22 @@ impl Compiler {
                             self.compile_defun(expr)?;
                         } else if s == "defmacro" {
                             self.compile_defmacro(expr)?;
+                        } else if s == "defvar" {
+                            self.compile_global_var(expr, false)?;
+                        } else if s == "defconst" {
+                            self.compile_global_var(expr, true)?;
                         }
                     }
                 }
             }
         }
 
-        // Second pass: compile non-defun/non-defmacro expressions into main bytecode
+        // Second pass: compile non-definition expressions into main bytecode
         for expr in exprs {
             let is_definition = if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
                     if let LispExpr::Symbol(s) = &first.expr {
-                        s == "defun" || s == "defmacro"
+                        s == "defun" || s == "defmacro" || s == "defvar" || s == "defconst"
                     } else {
                         false
                     }
