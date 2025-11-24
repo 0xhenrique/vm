@@ -153,9 +153,20 @@ fn tokenize(input: &str) -> Vec<Token> {
     let mut string_content = String::new();
     let mut string_start_line = 1;
     let mut string_start_column = 1;
+    let mut in_comment = false;
 
     for ch in input.chars() {
-        if in_string {
+        if in_comment {
+            // Skip everything until newline
+            if ch == '\n' {
+                in_comment = false;
+                line += 1;
+                column = 1;
+                token_start_column = 1;
+            } else {
+                column += 1;
+            }
+        } else if in_string {
             if ch == '"' {
                 // End of string
                 tokens.push(Token {
@@ -195,6 +206,19 @@ fn tokenize(input: &str) -> Vec<Token> {
                     in_string = true;
                     string_start_line = line;
                     string_start_column = column;
+                    column += 1;
+                }
+                ';' => {
+                    // Start of comment - skip until end of line
+                    if !current.is_empty() {
+                        tokens.push(Token {
+                            text: current.clone(),
+                            line,
+                            column: token_start_column,
+                        });
+                        current.clear();
+                    }
+                    in_comment = true;
                     column += 1;
                 }
                 '(' | ')' | '\'' | '`' | ',' | '@' => {

@@ -224,6 +224,14 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             write_string(bytes, name);
             write_u32(bytes, *argc as u32);
         }
+        Instruction::LoadGlobal(name) => {
+            bytes.push(38);
+            write_string(bytes, name);
+        }
+        Instruction::StoreGlobal(name) => {
+            bytes.push(39);
+            write_string(bytes, name);
+        }
     }
 }
 
@@ -301,6 +309,8 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
             let argc = read_u32(bytes, pos)? as usize;
             Ok(Instruction::TailCall(name, argc))
         }
+        38 => Ok(Instruction::LoadGlobal(read_string(bytes, pos)?)),
+        39 => Ok(Instruction::StoreGlobal(read_string(bytes, pos)?)),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
