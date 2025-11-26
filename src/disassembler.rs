@@ -95,6 +95,20 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::MakeList(n) => format!("MakeList({})", n),
         Instruction::LoadGlobal(name) => format!("LoadGlobal(\"{}\")", name),
         Instruction::StoreGlobal(name) => format!("StoreGlobal(\"{}\")", name),
+        Instruction::StringLength => "StringLength".to_string(),
+        Instruction::Substring => "Substring".to_string(),
+        Instruction::StringAppend => "StringAppend".to_string(),
+        Instruction::StringToList => "StringToList".to_string(),
+        Instruction::ListToString => "ListToString".to_string(),
+        Instruction::CharCode => "CharCode".to_string(),
+        Instruction::ReadFile => "ReadFile".to_string(),
+        Instruction::WriteFile => "WriteFile".to_string(),
+        Instruction::FileExists => "FileExists".to_string(),
+        Instruction::GetArgs => "GetArgs".to_string(),
+        Instruction::WriteBinaryFile => "WriteBinaryFile".to_string(),
+        Instruction::ListRef => "ListRef".to_string(),
+        Instruction::ListLength => "ListLength".to_string(),
+        Instruction::NumberToString => "NumberToString".to_string(),
     }
 }
 

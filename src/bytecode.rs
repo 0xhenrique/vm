@@ -232,6 +232,20 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(39);
             write_string(bytes, name);
         }
+        Instruction::StringLength => bytes.push(40),
+        Instruction::Substring => bytes.push(41),
+        Instruction::StringAppend => bytes.push(42),
+        Instruction::StringToList => bytes.push(43),
+        Instruction::ListToString => bytes.push(44),
+        Instruction::CharCode => bytes.push(50),
+        Instruction::ReadFile => bytes.push(45),
+        Instruction::WriteFile => bytes.push(46),
+        Instruction::FileExists => bytes.push(47),
+        Instruction::GetArgs => bytes.push(48),
+        Instruction::WriteBinaryFile => bytes.push(49),
+        Instruction::ListRef => bytes.push(51),
+        Instruction::ListLength => bytes.push(52),
+        Instruction::NumberToString => bytes.push(53),
     }
 }
 
@@ -311,6 +325,20 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         }
         38 => Ok(Instruction::LoadGlobal(read_string(bytes, pos)?)),
         39 => Ok(Instruction::StoreGlobal(read_string(bytes, pos)?)),
+        40 => Ok(Instruction::StringLength),
+        41 => Ok(Instruction::Substring),
+        42 => Ok(Instruction::StringAppend),
+        43 => Ok(Instruction::StringToList),
+        44 => Ok(Instruction::ListToString),
+        50 => Ok(Instruction::CharCode),
+        45 => Ok(Instruction::ReadFile),
+        46 => Ok(Instruction::WriteFile),
+        47 => Ok(Instruction::FileExists),
+        48 => Ok(Instruction::GetArgs),
+        49 => Ok(Instruction::WriteBinaryFile),
+        51 => Ok(Instruction::ListRef),
+        52 => Ok(Instruction::ListLength),
+        53 => Ok(Instruction::NumberToString),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }

@@ -61,12 +61,29 @@ pub enum Instruction {
     IsSymbol,       // Pop value, push boolean indicating if it's a symbol
     SymbolToString, // Pop symbol, push string
     StringToSymbol, // Pop string, push symbol
+    StringLength,   // Pop string, push integer length
+    Substring,      // Pop string, start, end; push substring
+    StringAppend,   // Pop two strings, push concatenation
+    StringToList,   // Pop string, push list of single-char strings
+    ListToString,   // Pop list of strings/chars, push concatenated string
+    CharCode,       // Pop single-char string, push ASCII code as integer
     // List manipulation
     Append,         // Pop two lists, push their concatenation (second appended to first)
     MakeList(usize), // Pop N values from stack and create a list from them (in order)
+    ListRef,        // Pop list and index, push element at that index (0-based)
+    ListLength,     // Pop list, push its length as integer
+    // Number operations
+    NumberToString, // Pop integer, push string representation
+    // File I/O operations
+    ReadFile,       // Pop string path, push file contents as string (or error)
+    WriteFile,      // Pop string path, string content; push boolean success
+    FileExists,     // Pop string path, push boolean indicating if file exists
+    WriteBinaryFile, // Pop string path, list of integers (bytes); write binary file
     // Global variables
     LoadGlobal(String),  // Push value of global variable onto stack
     StoreGlobal(String), // Pop value from stack and store in global variable
+    // Command-line arguments
+    GetArgs,             // Push command-line arguments as a list of strings
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -207,6 +224,7 @@ pub struct Frame {
     pub return_bytecode: Vec<Instruction>, // Bytecode to return to after function call
     pub function_name: String, // For stack traces
     pub captured: Vec<Value>, // Captured variables for closures
+    pub stack_base: usize, // Base position of this function's locals on the value stack
 }
 
 pub struct VM {
@@ -217,12 +235,13 @@ pub struct VM {
     pub current_bytecode: Vec<Instruction>,
     pub halted: bool,
     pub global_vars: HashMap<String, Value>, // Global variables
+    pub args: Vec<String>, // Command-line arguments
 }
 
 impl VM {
 
     pub fn new() -> Self {
-        VM {
+        let mut vm = VM {
             instruction_pointer: 0,
             value_stack: Vec::new(),
             call_stack: Vec::new(),
@@ -230,7 +249,62 @@ impl VM {
             current_bytecode: Vec::new(),
             halted: false,
             global_vars: HashMap::new(),
-        }
+            args: Vec::new(),
+        };
+        vm.register_builtins();
+        vm
+    }
+
+    fn register_builtins(&mut self) {
+        use Instruction::*;
+
+        // Arithmetic operations
+        self.functions.insert("+".to_string(), vec![Add, Ret]);
+        self.functions.insert("-".to_string(), vec![Sub, Ret]);
+        self.functions.insert("*".to_string(), vec![Mul, Ret]);
+        self.functions.insert("/".to_string(), vec![Div, Ret]);
+        self.functions.insert("%".to_string(), vec![Mod, Ret]);
+        self.functions.insert("neg".to_string(), vec![Neg, Ret]);
+
+        // Comparison operations
+        self.functions.insert("<=".to_string(), vec![Leq, Ret]);
+        self.functions.insert("<".to_string(), vec![Lt, Ret]);
+        self.functions.insert(">".to_string(), vec![Gt, Ret]);
+        self.functions.insert(">=".to_string(), vec![Gte, Ret]);
+        self.functions.insert("==".to_string(), vec![Eq, Ret]);
+        self.functions.insert("!=".to_string(), vec![Neq, Ret]);
+
+        // List operations
+        self.functions.insert("cons".to_string(), vec![Cons, Ret]);
+        self.functions.insert("car".to_string(), vec![Car, Ret]);
+        self.functions.insert("cdr".to_string(), vec![Cdr, Ret]);
+        self.functions.insert("list?".to_string(), vec![IsList, Ret]);
+        self.functions.insert("append".to_string(), vec![Append, Ret]);
+        self.functions.insert("list-ref".to_string(), vec![ListRef, Ret]);
+        self.functions.insert("list-length".to_string(), vec![ListLength, Ret]);
+
+        // String operations
+        self.functions.insert("string?".to_string(), vec![IsString, Ret]);
+        self.functions.insert("symbol?".to_string(), vec![IsSymbol, Ret]);
+        self.functions.insert("symbol->string".to_string(), vec![SymbolToString, Ret]);
+        self.functions.insert("string->symbol".to_string(), vec![StringToSymbol, Ret]);
+        self.functions.insert("string-length".to_string(), vec![StringLength, Ret]);
+        self.functions.insert("substring".to_string(), vec![Substring, Ret]);
+        self.functions.insert("string-append".to_string(), vec![StringAppend, Ret]);
+        self.functions.insert("string->list".to_string(), vec![StringToList, Ret]);
+        self.functions.insert("list->string".to_string(), vec![ListToString, Ret]);
+        self.functions.insert("char-code".to_string(), vec![CharCode, Ret]);
+        self.functions.insert("number->string".to_string(), vec![NumberToString, Ret]);
+
+        // File I/O operations
+        self.functions.insert("read-file".to_string(), vec![ReadFile, Ret]);
+        self.functions.insert("write-file".to_string(), vec![WriteFile, Ret]);
+        self.functions.insert("file-exists?".to_string(), vec![FileExists, Ret]);
+        self.functions.insert("write-binary-file".to_string(), vec![WriteBinaryFile, Ret]);
+
+        // Other operations
+        self.functions.insert("get-args".to_string(), vec![GetArgs, Ret]);
+        self.functions.insert("print".to_string(), vec![Print, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) {
@@ -397,9 +471,15 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::GetLocal(pos) => {
-                // Load from value stack at position (from bottom)
-                let value = self.value_stack.get(pos)
-                    .expect(&format!("Stack position {} out of bounds", pos))
+                // Load from value stack at position relative to current frame's stack base
+                let stack_base = if let Some(frame) = self.call_stack.last() {
+                    frame.stack_base
+                } else {
+                    0  // Main execution has stack_base 0
+                };
+                let absolute_pos = stack_base + pos;
+                let value = self.value_stack.get(absolute_pos)
+                    .expect(&format!("Stack position {} (base {} + offset {}) out of bounds", absolute_pos, stack_base, pos))
                     .clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
@@ -482,6 +562,7 @@ impl VM {
                             return_bytecode: self.current_bytecode.to_vec(),
                             function_name: "<closure>".to_string(),
                             captured: captured.iter().map(|(_, v)| v.clone()).collect(),
+                            stack_base: self.value_stack.len(), // Current stack top is base for this function
                         };
 
                         self.call_stack.push(frame);
@@ -531,6 +612,7 @@ impl VM {
                     return_bytecode: self.current_bytecode.clone(),
                     function_name: fn_name.clone(),
                     captured: Vec::new(), // Regular functions don't have captured variables
+                    stack_base: self.value_stack.len(), // Current stack top is base for this function
                 };
                 self.call_stack.push(frame);
 
@@ -553,11 +635,15 @@ impl VM {
                 // Reuse current frame instead of pushing a new one
                 // This is the key to tail call optimization!
                 if let Some(frame) = self.call_stack.last_mut() {
+                    // Clear the value_stack back to this frame's base
+                    // This is crucial - any let bindings or temporary values should be removed
+                    self.value_stack.truncate(frame.stack_base);
+
                     // Replace the locals (arguments) in the current frame
                     frame.locals = args;
                     // Update function name for stack traces
                     frame.function_name = fn_name.clone();
-                    // Keep the same return address and return bytecode
+                    // Keep the same return address, return bytecode, and stack_base
                 } else {
                     // No frame exists (top-level call), treat as regular call
                     let frame = Frame {
@@ -566,6 +652,7 @@ impl VM {
                         return_bytecode: self.current_bytecode.clone(),
                         function_name: fn_name.clone(),
                         captured: Vec::new(),
+                        stack_base: self.value_stack.len(), // Current stack top is base for this function
                     };
                     self.call_stack.push(frame);
                 }
@@ -686,6 +773,48 @@ impl VM {
                 self.value_stack.push(Value::List(items));
                 self.instruction_pointer += 1;
             }
+            Instruction::ListRef => {
+                // Pop index and list, push element at that index
+                let index = self.value_stack.pop().expect("Stack underflow");
+                let list = self.value_stack.pop().expect("Stack underflow");
+
+                match (list, index) {
+                    (Value::List(items), Value::Integer(idx)) => {
+                        if idx < 0 {
+                            panic!("list-ref: index cannot be negative: {}", idx);
+                        }
+                        let idx_usize = idx as usize;
+                        if idx_usize >= items.len() {
+                            panic!("list-ref: index {} out of bounds for list of length {}", idx, items.len());
+                        }
+                        self.value_stack.push(items[idx_usize].clone());
+                    }
+                    _ => panic!("list-ref: expected list and integer index"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::ListLength => {
+                // Pop list and push its length
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::List(items) => {
+                        self.value_stack.push(Value::Integer(items.len() as i64));
+                    }
+                    _ => panic!("list-length: expected list"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::NumberToString => {
+                // Pop integer and push string representation
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::Integer(n) => {
+                        self.value_stack.push(Value::String(n.to_string()));
+                    }
+                    _ => panic!("number->string: expected integer"),
+                }
+                self.instruction_pointer += 1;
+            }
             Instruction::LoadGlobal(name) => {
                 let value = self.global_vars.get(&name)
                     .expect(&format!("Undefined global variable: {}", name))
@@ -696,6 +825,178 @@ impl VM {
             Instruction::StoreGlobal(name) => {
                 let value = self.value_stack.pop().expect("Stack underflow");
                 self.global_vars.insert(name, value);
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringLength => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::String(s) => {
+                        self.value_stack.push(Value::Integer(s.len() as i64));
+                    }
+                    _ => panic!("string-length: expected string"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Substring => {
+                let end = self.value_stack.pop().expect("Stack underflow");
+                let start = self.value_stack.pop().expect("Stack underflow");
+                let string = self.value_stack.pop().expect("Stack underflow");
+
+                match (string, start, end) {
+                    (Value::String(s), Value::Integer(start_idx), Value::Integer(end_idx)) => {
+                        let start = start_idx.max(0) as usize;
+                        let end = end_idx.min(s.len() as i64) as usize;
+                        if start <= end && end <= s.len() {
+                            let result = s.chars().skip(start).take(end - start).collect::<String>();
+                            self.value_stack.push(Value::String(result));
+                        } else {
+                            panic!("substring: invalid indices");
+                        }
+                    }
+                    _ => panic!("substring: expected string and two integers"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringAppend => {
+                let second = self.value_stack.pop().expect("Stack underflow");
+                let first = self.value_stack.pop().expect("Stack underflow");
+
+                match (first, second) {
+                    (Value::String(s1), Value::String(s2)) => {
+                        self.value_stack.push(Value::String(format!("{}{}", s1, s2)));
+                    }
+                    _ => panic!("string-append: expected two strings"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringToList => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::String(s) => {
+                        let char_list: Vec<Value> = s.chars()
+                            .map(|c| Value::String(c.to_string()))
+                            .collect();
+                        self.value_stack.push(Value::List(char_list));
+                    }
+                    _ => panic!("string->list: expected string"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::ListToString => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::List(items) => {
+                        let mut result = String::new();
+                        for item in items {
+                            match item {
+                                Value::String(s) => result.push_str(&s),
+                                _ => panic!("list->string: list must contain only strings"),
+                            }
+                        }
+                        self.value_stack.push(Value::String(result));
+                    }
+                    _ => panic!("list->string: expected list"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::CharCode => {
+                let value = self.value_stack.pop().expect("Stack underflow");
+                match value {
+                    Value::String(s) => {
+                        if s.len() != 1 {
+                            panic!("char-code: expected single-character string, got {} characters", s.len());
+                        }
+                        let code = s.chars().next().unwrap() as i64;
+                        self.value_stack.push(Value::Integer(code));
+                    }
+                    _ => panic!("char-code: expected string"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::ReadFile => {
+                let path = self.value_stack.pop().expect("Stack underflow");
+                match path {
+                    Value::String(path_str) => {
+                        match std::fs::read_to_string(&path_str) {
+                            Ok(contents) => {
+                                self.value_stack.push(Value::String(contents));
+                            }
+                            Err(e) => {
+                                panic!("read-file: failed to read '{}': {}", path_str, e);
+                            }
+                        }
+                    }
+                    _ => panic!("read-file: expected string path"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::WriteFile => {
+                let content = self.value_stack.pop().expect("Stack underflow");
+                let path = self.value_stack.pop().expect("Stack underflow");
+
+                match (path, content) {
+                    (Value::String(path_str), Value::String(content_str)) => {
+                        match std::fs::write(&path_str, &content_str) {
+                            Ok(_) => {
+                                self.value_stack.push(Value::Boolean(true));
+                            }
+                            Err(e) => {
+                                eprintln!("write-file: failed to write '{}': {}", path_str, e);
+                                self.value_stack.push(Value::Boolean(false));
+                            }
+                        }
+                    }
+                    _ => panic!("write-file: expected string path and string content"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::FileExists => {
+                let path = self.value_stack.pop().expect("Stack underflow");
+                match path {
+                    Value::String(path_str) => {
+                        let exists = std::path::Path::new(&path_str).exists();
+                        self.value_stack.push(Value::Boolean(exists));
+                    }
+                    _ => panic!("file-exists?: expected string path"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::WriteBinaryFile => {
+                let bytes_list = self.value_stack.pop().expect("Stack underflow");
+                let path = self.value_stack.pop().expect("Stack underflow");
+
+                match (path, bytes_list) {
+                    (Value::String(path_str), Value::List(bytes)) => {
+                        // Convert list of integers to Vec<u8>
+                        let mut byte_vec = Vec::new();
+                        for byte_val in bytes {
+                            match byte_val {
+                                Value::Integer(n) if n >= 0 && n <= 255 => {
+                                    byte_vec.push(n as u8);
+                                }
+                                _ => panic!("write-binary-file: list must contain integers 0-255"),
+                            }
+                        }
+
+                        // Write bytes to file
+                        match std::fs::write(&path_str, &byte_vec) {
+                            Ok(_) => self.value_stack.push(Value::Boolean(true)),
+                            Err(e) => {
+                                eprintln!("write-binary-file: failed to write '{}': {}", path_str, e);
+                                self.value_stack.push(Value::Boolean(false));
+                            }
+                        }
+                    }
+                    _ => panic!("write-binary-file: expected string path and list of bytes"),
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::GetArgs => {
+                // Convert Vec<String> to Value::List of Value::String
+                let args_list = self.args.iter()
+                    .map(|s| Value::String(s.clone()))
+                    .collect();
+                self.value_stack.push(Value::List(args_list));
                 self.instruction_pointer += 1;
             }
         }
@@ -1134,6 +1435,135 @@ impl Compiler {
                         self.in_tail_position = saved_tail;
                     }
 
+                    // Logical and: (and expr1 expr2 ...) - short-circuit on false
+                    "and" => {
+                        if items.len() < 2 {
+                            return Err(CompileError::new(
+                                "and expects at least 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        if items.len() == 2 {
+                            // Single expression: just compile it
+                            self.compile_expr(&items[1])?;
+                        } else {
+                            // Multiple expressions: compile as nested if expressions
+                            // (and a b c) => (if a (if b c false) false)
+                            self.compile_and_helper(&items[1..], expr)?;
+                        }
+                    }
+
+                    // Logical or: (or expr1 expr2 ...) - short-circuit on true
+                    "or" => {
+                        if items.len() < 2 {
+                            return Err(CompileError::new(
+                                "or expects at least 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        if items.len() == 2 {
+                            // Single expression: just compile it
+                            self.compile_expr(&items[1])?;
+                        } else {
+                            // Multiple expressions: compile as nested if expressions
+                            // (or a b c) => (if a true (if b true c))
+                            self.compile_or_helper(&items[1..], expr)?;
+                        }
+                    }
+
+                    // Cond: (cond (test1 expr1) (test2 expr2) ... (else default))
+                    "cond" => {
+                        if items.len() < 2 {
+                            return Err(CompileError::new(
+                                "cond expects at least 1 clause".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        self.compile_cond(&items[1..], expr)?;
+                    }
+
+                    // When: (when test expr) - syntactic sugar for (if test expr false)
+                    "when" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "when expects exactly 2 arguments (test, expr)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        let saved_tail = self.in_tail_position;
+
+                        // Compile test (not in tail position)
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+
+                        // Emit JmpIfFalse with placeholder
+                        let jmp_if_false_index = self.bytecode.len();
+                        self.emit(Instruction::JmpIfFalse(0));
+
+                        // Compile then-branch (inherits tail position)
+                        self.in_tail_position = saved_tail;
+                        self.compile_expr(&items[2])?;
+
+                        // Emit Jmp to skip else-branch
+                        let jmp_to_end_index = self.bytecode.len();
+                        self.emit(Instruction::Jmp(0));
+
+                        // Else branch (push false)
+                        let else_addr = self.instruction_address;
+                        self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(else_addr);
+                        self.emit(Instruction::Push(Value::Boolean(false)));
+
+                        // End
+                        let end_addr = self.instruction_address;
+                        self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+                        self.in_tail_position = saved_tail;
+                    }
+
+                    // Unless: (unless test expr) - syntactic sugar for (if test false expr)
+                    "unless" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "unless expects exactly 2 arguments (test, expr)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        let saved_tail = self.in_tail_position;
+
+                        // Compile test (not in tail position)
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+
+                        // Emit JmpIfFalse with placeholder
+                        let jmp_if_false_index = self.bytecode.len();
+                        self.emit(Instruction::JmpIfFalse(0));
+
+                        // Then branch (push false)
+                        self.emit(Instruction::Push(Value::Boolean(false)));
+
+                        // Emit Jmp to skip else-branch
+                        let jmp_to_end_index = self.bytecode.len();
+                        self.emit(Instruction::Jmp(0));
+
+                        // Else branch (compile expr)
+                        let else_addr = self.instruction_address;
+                        self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(else_addr);
+
+                        self.in_tail_position = saved_tail;
+                        self.compile_expr(&items[2])?;
+
+                        // End
+                        let end_addr = self.instruction_address;
+                        self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+                        self.in_tail_position = saved_tail;
+                    }
+
                     // Print: (print expr)
                     "print" => {
                         if items.len() != 2 {
@@ -1301,6 +1731,212 @@ impl Compiler {
                         self.emit(Instruction::StringToSymbol);
                         self.in_tail_position = saved_tail;
                     }
+                    "string-length" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "string-length expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::StringLength);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "substring" => {
+                        if items.len() != 4 {
+                            return Err(CompileError::new(
+                                "substring expects exactly 3 arguments (string, start, end)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?; // string
+                        self.compile_expr(&items[2])?; // start
+                        self.compile_expr(&items[3])?; // end
+                        self.emit(Instruction::Substring);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "string-append" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "string-append expects exactly 2 arguments".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.compile_expr(&items[2])?;
+                        self.emit(Instruction::StringAppend);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "string->list" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "string->list expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::StringToList);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "list->string" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "list->string expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::ListToString);
+                        self.in_tail_position = saved_tail;
+                    }
+
+                    // File I/O operations
+                    "read-file" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "read-file expects exactly 1 argument (path)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::ReadFile);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "write-file" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "write-file expects exactly 2 arguments (path, content)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?; // path
+                        self.compile_expr(&items[2])?; // content
+                        self.emit(Instruction::WriteFile);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "file-exists?" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "file-exists? expects exactly 1 argument (path)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::FileExists);
+                        self.in_tail_position = saved_tail;
+                    }
+
+                    // Command-line arguments
+                    "get-args" => {
+                        if items.len() != 1 {
+                            return Err(CompileError::new(
+                                "get-args expects no arguments".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        self.emit(Instruction::GetArgs);
+                    }
+                    "write-binary-file" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "write-binary-file expects exactly 2 arguments (path, bytes)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?; // path
+                        self.compile_expr(&items[2])?; // bytes list
+                        self.emit(Instruction::WriteBinaryFile);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "char-code" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "char-code expects exactly 1 argument (single-char string)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::CharCode);
+                        self.in_tail_position = saved_tail;
+                    }
+
+                    // List operations
+                    "list-ref" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "list-ref expects exactly 2 arguments (list, index)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?; // list
+                        self.compile_expr(&items[2])?; // index
+                        self.emit(Instruction::ListRef);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "list-length" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "list-length expects exactly 1 argument (list)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::ListLength);
+                        self.in_tail_position = saved_tail;
+                    }
+                    "append" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "append expects exactly 2 arguments (list1, list2)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?; // first list
+                        self.compile_expr(&items[2])?; // second list
+                        self.emit(Instruction::Append);
+                        self.in_tail_position = saved_tail;
+                    }
+
+                    // Number operations
+                    "number->string" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "number->string expects exactly 1 argument (integer)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[1])?;
+                        self.emit(Instruction::NumberToString);
+                        self.in_tail_position = saved_tail;
+                    }
 
                     // User-defined function call or closure variable or macro
                     _ => {
@@ -1450,7 +2086,20 @@ impl Compiler {
             }
         };
 
-        // Register as global variable (is_const flag indicates if mutable)
+        // Check if variable already exists and enforce const semantics
+        if let Some(&is_mutable) = self.global_vars.get(&var_name) {
+            if !is_mutable {
+                // Trying to redefine a constant
+                return Err(CompileError::new(
+                    format!("Cannot redefine constant '{}'", var_name),
+                    items[1].location.clone(),
+                ));
+            }
+            // It's a mutable variable (defvar), allow redefinition with warning
+            // In the future, we could add a warning system here
+        }
+
+        // Register as global variable (flag: true if mutable, false if const)
         self.global_vars.insert(var_name.clone(), !is_const);
 
         // Compile the value expression
@@ -2089,6 +2738,7 @@ impl Compiler {
             return_bytecode: Vec::new(),
             function_name: "<macro>".to_string(),
             captured: Vec::new(),
+            stack_base: 0, // Macro expansion uses a fresh VM
         };
         vm.call_stack.push(frame);
 
@@ -2291,6 +2941,181 @@ impl Compiler {
         // Emit MakeClosure instruction
         self.emit(Instruction::MakeClosure(params, body_bytecode, free_vars.len()));
 
+        Ok(())
+    }
+
+    // Helper for compiling and: (and a b c) => (if a (if b c false) false)
+    fn compile_and_helper(&mut self, exprs: &[SourceExpr], context: &SourceExpr) -> Result<(), CompileError> {
+        if exprs.is_empty() {
+            // Empty and is true
+            self.emit(Instruction::Push(Value::Boolean(true)));
+            return Ok(());
+        }
+
+        if exprs.len() == 1 {
+            // Last expression - just compile it
+            self.compile_expr(&exprs[0])?;
+            return Ok(());
+        }
+
+        // Multiple expressions: if first then (and rest...) else false
+        let saved_tail = self.in_tail_position;
+
+        // Compile first expression (not in tail position)
+        self.in_tail_position = false;
+        self.compile_expr(&exprs[0])?;
+
+        // Emit JmpIfFalse with placeholder
+        let jmp_if_false_index = self.bytecode.len();
+        self.emit(Instruction::JmpIfFalse(0));
+
+        // Compile rest (inherits tail position)
+        self.in_tail_position = saved_tail;
+        self.compile_and_helper(&exprs[1..], context)?;
+
+        // Emit Jmp to skip false branch
+        let jmp_to_end_index = self.bytecode.len();
+        self.emit(Instruction::Jmp(0));
+
+        // False branch
+        let false_addr = self.instruction_address;
+        self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(false_addr);
+        self.emit(Instruction::Push(Value::Boolean(false)));
+
+        // End
+        let end_addr = self.instruction_address;
+        self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+        self.in_tail_position = saved_tail;
+        Ok(())
+    }
+
+    // Helper for compiling or: (or a b c) => (if a true (if b true c))
+    fn compile_or_helper(&mut self, exprs: &[SourceExpr], context: &SourceExpr) -> Result<(), CompileError> {
+        if exprs.is_empty() {
+            // Empty or is false
+            self.emit(Instruction::Push(Value::Boolean(false)));
+            return Ok(());
+        }
+
+        if exprs.len() == 1 {
+            // Last expression - just compile it
+            self.compile_expr(&exprs[0])?;
+            return Ok(());
+        }
+
+        // Multiple expressions: if first then true else (or rest...)
+        let saved_tail = self.in_tail_position;
+
+        // Compile first expression (not in tail position)
+        self.in_tail_position = false;
+        self.compile_expr(&exprs[0])?;
+
+        // Emit JmpIfFalse with placeholder
+        let jmp_if_false_index = self.bytecode.len();
+        self.emit(Instruction::JmpIfFalse(0));
+
+        // True branch
+        self.emit(Instruction::Push(Value::Boolean(true)));
+
+        // Emit Jmp to skip rest
+        let jmp_to_end_index = self.bytecode.len();
+        self.emit(Instruction::Jmp(0));
+
+        // Rest branch
+        let rest_addr = self.instruction_address;
+        self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(rest_addr);
+
+        self.in_tail_position = saved_tail;
+        self.compile_or_helper(&exprs[1..], context)?;
+
+        // End
+        let end_addr = self.instruction_address;
+        self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+        self.in_tail_position = saved_tail;
+        Ok(())
+    }
+
+    // Helper for compiling cond: (cond (test1 expr1) (test2 expr2) ... (else default))
+    fn compile_cond(&mut self, clauses: &[SourceExpr], context: &SourceExpr) -> Result<(), CompileError> {
+        if clauses.is_empty() {
+            // No clauses - push false
+            self.emit(Instruction::Push(Value::Boolean(false)));
+            return Ok(());
+        }
+
+        let saved_tail = self.in_tail_position;
+
+        for (i, clause) in clauses.iter().enumerate() {
+            let is_last = i == clauses.len() - 1;
+
+            match &clause.expr {
+                LispExpr::List(items) if items.len() == 2 => {
+                    // Check if this is an else clause
+                    let is_else = match &items[0].expr {
+                        LispExpr::Symbol(s) if s == "else" => true,
+                        _ => false,
+                    };
+
+                    if is_else {
+                        // Else clause - just compile the expression
+                        if !is_last {
+                            return Err(CompileError::new(
+                                "else clause must be the last clause in cond".to_string(),
+                                clause.location.clone(),
+                            ));
+                        }
+                        self.in_tail_position = saved_tail;
+                        self.compile_expr(&items[1])?;
+                    } else {
+                        // Regular clause: (test expr)
+                        // Compile test (not in tail position)
+                        self.in_tail_position = false;
+                        self.compile_expr(&items[0])?;
+
+                        // Emit JmpIfFalse with placeholder
+                        let jmp_if_false_index = self.bytecode.len();
+                        self.emit(Instruction::JmpIfFalse(0));
+
+                        // Compile then branch (inherits tail position)
+                        self.in_tail_position = saved_tail;
+                        self.compile_expr(&items[1])?;
+
+                        // Emit Jmp to end
+                        let jmp_to_end_index = self.bytecode.len();
+                        self.emit(Instruction::Jmp(0));
+
+                        // Record else/next branch address
+                        let else_addr = self.instruction_address;
+                        self.bytecode[jmp_if_false_index] = Instruction::JmpIfFalse(else_addr);
+
+                        // If this is the last clause and not else, compile remaining clauses
+                        if !is_last {
+                            self.compile_cond(&clauses[i + 1..], context)?;
+                        } else {
+                            // Last clause without else - push false
+                            self.emit(Instruction::Push(Value::Boolean(false)));
+                        }
+
+                        // Patch jump to end
+                        let end_addr = self.instruction_address;
+                        self.bytecode[jmp_to_end_index] = Instruction::Jmp(end_addr);
+
+                        // Important: break after processing to avoid double-processing
+                        break;
+                    }
+                }
+                _ => {
+                    return Err(CompileError::new(
+                        "cond clause must be a list of (test expr)".to_string(),
+                        clause.location.clone(),
+                    ));
+                }
+            }
+        }
+
+        self.in_tail_position = saved_tail;
         Ok(())
     }
 

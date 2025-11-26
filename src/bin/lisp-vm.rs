@@ -31,5 +31,11 @@ fn main() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main_bytecode;
+
+    // Pass command-line arguments to the VM (skip program name and bytecode file)
+    if args.len() > 2 {
+        vm.args = args[2..].to_vec();
+    }
+
     vm.run();
 }
