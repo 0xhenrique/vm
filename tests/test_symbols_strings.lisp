@@ -1,6 +1,0 @@
-(print '(+ 1 2))
-(print "hello world")
-(print (symbol? '+))
-(print (string? "test"))
-(print (symbol->string '+))
-(print (string->symbol "foo"))

@@ -1,6 +1,0 @@
-(print '(1 2 3))
-(print (cons 0 '(1 2 3)))
-(print (car '(10 20 30)))
-(print (cdr '(10 20 30)))
-(print (list? '(1 2)))
-(print (list? 42))
