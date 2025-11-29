@@ -214,6 +214,12 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::Apply => {
             bytes.push(78);
         }
+        Instruction::LoadFile => {
+            bytes.push(79);
+        }
+        Instruction::RequireFile => {
+            bytes.push(80);
+        }
         Instruction::LoadCaptured(idx) => {
             bytes.push(34);
             write_u32(bytes, *idx as u32);
@@ -442,6 +448,8 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
             Ok(Instruction::MakeVariadicClosure(params, rest_param, body, num_captured))
         }
         78 => Ok(Instruction::Apply),
+        79 => Ok(Instruction::LoadFile),
+        80 => Ok(Instruction::RequireFile),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }

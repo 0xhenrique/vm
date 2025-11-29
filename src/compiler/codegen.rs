@@ -2296,7 +2296,7 @@ impl Compiler {
             "string-length" | "substring" | "string-append" | "string->list" |
             "list->string" | "char-code" | "number->string" | "string->number" |
             // File I/O
-            "read-file" | "write-file" | "file-exists?" | "write-binary-file" |
+            "read-file" | "write-file" | "file-exists?" | "write-binary-file" | "load" | "require" |
             // HashMap operations
             "hashmap?" | "hashmap-get" | "hashmap-set" | "hashmap-keys" |
             "hashmap-values" | "hashmap-contains-key?" |

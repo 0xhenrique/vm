@@ -68,6 +68,8 @@ pub enum Instruction {
     WriteFile,      // Pop string path, string content; push boolean success
     FileExists,     // Pop string path, push boolean indicating if file exists
     WriteBinaryFile, // Pop string path, list of integers (bytes); write binary file
+    LoadFile,       // Pop string path, load and execute Lisp file in current environment
+    RequireFile,    // Pop string path, load and execute Lisp file only if not already loaded
     // Global variables
     LoadGlobal(String),  // Push value of global variable onto stack
     StoreGlobal(String), // Pop value from stack and store in global variable

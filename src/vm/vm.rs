@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use super::value::Value;
 use super::instructions::Instruction;
 use super::stack::Frame;
 use super::errors::RuntimeError;
+use crate::parser::Parser;
+use crate::compiler::Compiler;
 
 pub struct VM {
     pub instruction_pointer: usize,
@@ -14,6 +17,7 @@ pub struct VM {
     pub halted: bool,
     pub global_vars: HashMap<String, Value>, // Global variables
     pub args: Vec<String>, // Command-line arguments
+    pub loaded_modules: HashSet<String>,     // Track loaded modules for require
 }
 
 impl VM {
@@ -28,6 +32,7 @@ impl VM {
             halted: false,
             global_vars: HashMap::new(),
             args: Vec::new(),
+            loaded_modules: HashSet::new(),
         };
         vm.register_builtins();
         vm
@@ -90,6 +95,8 @@ impl VM {
         self.functions.insert("write-file".to_string(), vec![LoadArg(0), LoadArg(1), WriteFile, Ret]);
         self.functions.insert("file-exists?".to_string(), vec![LoadArg(0), FileExists, Ret]);
         self.functions.insert("write-binary-file".to_string(), vec![LoadArg(0), LoadArg(1), WriteBinaryFile, Ret]);
+        self.functions.insert("load".to_string(), vec![LoadArg(0), LoadFile, Ret]);
+        self.functions.insert("require".to_string(), vec![LoadArg(0), RequireFile, Ret]);
 
         // Other operations
         self.functions.insert("get-args".to_string(), vec![GetArgs, Ret]);
@@ -1224,6 +1231,126 @@ impl VM {
                             "Type error: 'write-binary-file' expects a string path and a list of bytes, got {} and {}",
                             Self::type_name(&path),
                             Self::type_name(&bytes_list)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::LoadFile => {
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in LoadFile".to_string()))?;
+                match path {
+                    Value::String(path_str) => {
+                        // Read the file
+                        let source = std::fs::read_to_string(&path_str).map_err(|e| {
+                            RuntimeError::new(format!("'load' failed to read '{}': {}", path_str, e))
+                        })?;
+
+                        // Parse the file
+                        let mut parser = Parser::new(&source);
+                        let exprs = parser.parse_all().map_err(|e| {
+                            RuntimeError::new(format!("'load' failed to parse '{}': {}", path_str, e))
+                        })?;
+
+                        // Compile the file
+                        let mut compiler = Compiler::new();
+                        let (functions, main) = compiler.compile_program(&exprs).map_err(|e| {
+                            RuntimeError::new(format!("'load' failed to compile '{}': {}", path_str, e.message))
+                        })?;
+
+                        // Merge compiled functions into VM's function table
+                        self.functions.extend(functions);
+
+                        // Execute the main bytecode from the loaded file
+                        // Save current state
+                        let saved_bytecode = std::mem::replace(&mut self.current_bytecode, main);
+                        let saved_ip = self.instruction_pointer;
+
+                        // Execute the loaded file's main code
+                        self.instruction_pointer = 0;
+                        while !self.halted && self.instruction_pointer < self.current_bytecode.len() {
+                            self.execute_one_instruction()?;
+                        }
+
+                        // Restore previous state
+                        self.current_bytecode = saved_bytecode;
+                        self.instruction_pointer = saved_ip;
+                        self.halted = false;
+
+                        // Push a success value (true) onto the stack
+                        self.value_stack.push(Value::Boolean(true));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'load' expects a string path, got {}",
+                            Self::type_name(&path)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::RequireFile => {
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in RequireFile".to_string()))?;
+                match path {
+                    Value::String(path_str) => {
+                        // Normalize the path to canonical form for consistent tracking
+                        let canonical_path = std::fs::canonicalize(&path_str)
+                            .unwrap_or_else(|_| std::path::PathBuf::from(&path_str))
+                            .to_string_lossy()
+                            .to_string();
+
+                        // Check if already loaded
+                        if self.loaded_modules.contains(&canonical_path) {
+                            // Already loaded, just return true
+                            self.value_stack.push(Value::Boolean(true));
+                        } else {
+                            // Not loaded yet, load it
+                            // Read the file
+                            let source = std::fs::read_to_string(&path_str).map_err(|e| {
+                                RuntimeError::new(format!("'require' failed to read '{}': {}", path_str, e))
+                            })?;
+
+                            // Parse the file
+                            let mut parser = Parser::new(&source);
+                            let exprs = parser.parse_all().map_err(|e| {
+                                RuntimeError::new(format!("'require' failed to parse '{}': {}", path_str, e))
+                            })?;
+
+                            // Compile the file
+                            let mut compiler = Compiler::new();
+                            let (functions, main) = compiler.compile_program(&exprs).map_err(|e| {
+                                RuntimeError::new(format!("'require' failed to compile '{}': {}", path_str, e.message))
+                            })?;
+
+                            // Merge compiled functions into VM's function table
+                            self.functions.extend(functions);
+
+                            // Execute the main bytecode from the loaded file
+                            // Save current state
+                            let saved_bytecode = std::mem::replace(&mut self.current_bytecode, main);
+                            let saved_ip = self.instruction_pointer;
+
+                            // Execute the loaded file's main code
+                            self.instruction_pointer = 0;
+                            while !self.halted && self.instruction_pointer < self.current_bytecode.len() {
+                                self.execute_one_instruction()?;
+                            }
+
+                            // Restore previous state
+                            self.current_bytecode = saved_bytecode;
+                            self.instruction_pointer = saved_ip;
+                            self.halted = false;
+
+                            // Mark as loaded
+                            self.loaded_modules.insert(canonical_path);
+
+                            // Push a success value (true) onto the stack
+                            self.value_stack.push(Value::Boolean(true));
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'require' expects a string path, got {}",
+                            Self::type_name(&path)
                         )));
                     }
                 }

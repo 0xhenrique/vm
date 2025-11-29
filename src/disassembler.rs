@@ -107,6 +107,8 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::FileExists => "FileExists".to_string(),
         Instruction::GetArgs => "GetArgs".to_string(),
         Instruction::WriteBinaryFile => "WriteBinaryFile".to_string(),
+        Instruction::LoadFile => "LoadFile".to_string(),
+        Instruction::RequireFile => "RequireFile".to_string(),
         Instruction::ListRef => "ListRef".to_string(),
         Instruction::ListLength => "ListLength".to_string(),
         Instruction::NumberToString => "NumberToString".to_string(),
