@@ -1,0 +1,9 @@
+#+TITLE: Lisp on Rust
+#+LANGUAGE: en
+#+AUTHOR: 0xhenrique
+
+- Lisp In C [Tsoding]: https://www.youtube.com/playlist?list=PLpM-Dvs8t0VYbTFO5tBwxG4Q20BJuqXD_
+- Bytecode Interpreter [Paolo Fabio]:  https://paolozaino.wordpress.com/2024/07/11/lets-write-a-bytecode-interpreter-in-many-programming-languages/
+- Carp [Programming Language]:  https://github.com/carp-lang/Carp
+- The Nature of Lisp: https://defmacro.org/ramblings/lisp.html
+- S-expression:  https://en.wikipedia.org/wiki/S-expression
