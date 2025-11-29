@@ -90,6 +90,7 @@ fn format_instruction(instr: &Instruction) -> String {
             format!("MakeClosure({:?}, {} instructions, {} captured)", params, body.len(), num_captured)
         }
         Instruction::CallClosure(argc) => format!("CallClosure({})", argc),
+        Instruction::Apply => "Apply".to_string(),
         Instruction::LoadCaptured(idx) => format!("LoadCaptured({})", idx),
         Instruction::Append => "Append".to_string(),
         Instruction::MakeList(n) => format!("MakeList({})", n),
@@ -135,6 +136,12 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::StringToNumber => "StringToNumber".to_string(),
         Instruction::ListToVector => "ListToVector".to_string(),
         Instruction::VectorToList => "VectorToList".to_string(),
+        // Variadic function support
+        Instruction::PackRestArgs(n) => format!("PackRestArgs({})", n),
+        Instruction::MakeVariadicClosure(params, rest_param, body, num_captured) => {
+            format!("MakeVariadicClosure({:?} . {}, {} instrs, {} captured)",
+                    params, rest_param, body.len(), num_captured)
+        }
     }
 }
 

@@ -10,9 +10,10 @@ pub enum Value {
     String(String),
     Function(String), // Reference to a named function
     Closure {
-        params: Vec<String>,
+        params: Vec<String>,              // Required parameters
+        rest_param: Option<String>,       // Optional rest parameter for variadic functions
         body: Vec<Instruction>,
-        captured: Vec<(String, Value)>, // Captured environment as ordered pairs
+        captured: Vec<(String, Value)>,   // Captured environment as ordered pairs
     },
     HashMap(HashMap<String, Value>), // Hash map with string keys
     Vector(Vec<Value>), // Efficient array with O(1) indexed access

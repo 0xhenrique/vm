@@ -211,6 +211,9 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(33);
             write_u32(bytes, *argc as u32);
         }
+        Instruction::Apply => {
+            bytes.push(78);
+        }
         Instruction::LoadCaptured(idx) => {
             bytes.push(34);
             write_u32(bytes, *idx as u32);
@@ -279,6 +282,28 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::StringToNumber => bytes.push(73),
         Instruction::ListToVector => bytes.push(74),
         Instruction::VectorToList => bytes.push(75),
+        // Variadic function support (76-77)
+        Instruction::PackRestArgs(required_count) => {
+            bytes.push(76);
+            write_u32(bytes, *required_count as u32);
+        }
+        Instruction::MakeVariadicClosure(params, rest_param, body, num_captured) => {
+            bytes.push(77);
+            // Write required params
+            write_u32(bytes, params.len() as u32);
+            for param in params {
+                write_string(bytes, param);
+            }
+            // Write rest param name
+            write_string(bytes, rest_param);
+            // Write body
+            write_u32(bytes, body.len() as u32);
+            for instr in body {
+                write_instruction(bytes, instr);
+            }
+            // Write num_captured
+            write_u32(bytes, *num_captured as u32);
+        }
     }
 }
 
@@ -398,6 +423,25 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         73 => Ok(Instruction::StringToNumber),
         74 => Ok(Instruction::ListToVector),
         75 => Ok(Instruction::VectorToList),
+        // Variadic function support (76-77)
+        76 => Ok(Instruction::PackRestArgs(read_u32(bytes, pos)? as usize)),
+        77 => {
+            // Read MakeVariadicClosure
+            let params_len = read_u32(bytes, pos)? as usize;
+            let mut params = Vec::new();
+            for _ in 0..params_len {
+                params.push(read_string(bytes, pos)?);
+            }
+            let rest_param = read_string(bytes, pos)?;
+            let body_len = read_u32(bytes, pos)? as usize;
+            let mut body = Vec::new();
+            for _ in 0..body_len {
+                body.push(read_instruction(bytes, pos)?);
+            }
+            let num_captured = read_u32(bytes, pos)? as usize;
+            Ok(Instruction::MakeVariadicClosure(params, rest_param, body, num_captured))
+        }
+        78 => Ok(Instruction::Apply),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -431,12 +475,20 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             bytes.push(5);
             write_string(bytes, name);
         }
-        Value::Closure { params, body, captured } => {
+        Value::Closure { params, rest_param, body, captured } => {
             bytes.push(6);
             // Write params
             write_u32(bytes, params.len() as u32);
             for param in params {
                 write_string(bytes, param);
+            }
+            // Write rest_param (Option<String>)
+            match rest_param {
+                None => bytes.push(0),
+                Some(rest_name) => {
+                    bytes.push(1);
+                    write_string(bytes, rest_name);
+                }
             }
             // Write body
             write_u32(bytes, body.len() as u32);
@@ -523,6 +575,14 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             for _ in 0..params_len {
                 params.push(read_string(bytes, pos)?);
             }
+            // Read rest_param (Option<String>)
+            let rest_param = if bytes[*pos] == 0 {
+                *pos += 1;
+                None
+            } else {
+                *pos += 1;
+                Some(read_string(bytes, pos)?)
+            };
             // Read body
             let body_len = read_u32(bytes, pos)? as usize;
             let mut body = Vec::new();
@@ -537,7 +597,7 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
                 let value = read_value(bytes, pos)?;
                 captured.push((name, value));
             }
-            Ok(Value::Closure { params, body, captured })
+            Ok(Value::Closure { params, rest_param, body, captured })
         }
         7 => {
             // Read HashMap

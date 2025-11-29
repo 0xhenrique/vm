@@ -25,8 +25,11 @@ pub enum Instruction {
     PopN(usize),     // Pop N values from the stack
     Slide(usize),    // Pop top value, pop N values, push top value back (cleanup let bindings)
     CheckArity(usize, usize), // Check if frame.locals.len() == expected_arity, jump to addr if not
+    PackRestArgs(usize), // Collect args from index N onwards into a list, replace them with the list in frame.locals
     MakeClosure(Vec<String>, Vec<Instruction>, usize), // Create closure: (params, body, num_captured_vars)
+    MakeVariadicClosure(Vec<String>, String, Vec<Instruction>, usize), // Variadic closure: (required_params, rest_param, body, num_captured)
     CallClosure(usize), // Call closure with N arguments (pops closure + args from stack)
+    Apply,              // Apply function to list of arguments: pop list, pop function/closure, call with list elements as args
     LoadCaptured(usize), // Load captured variable at index from current closure's environment
     Print,
     Halt,

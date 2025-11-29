@@ -11,7 +11,6 @@ use super::ast::{LispExpr, SourceExpr};
 
 #[derive(Clone)]
 enum ValueLocation {
-    Arg(usize),                                    // Direct argument
     Local(usize),                                  // Local variable on value stack
     Captured(usize),                               // Captured variable in closure
     ListElement(Box<ValueLocation>, usize),        // i-th element of a list
@@ -22,9 +21,6 @@ impl ValueLocation {
     // Emit instructions to load the value at this location onto the stack
     fn emit_load(&self, compiler: &mut Compiler) {
         match self {
-            ValueLocation::Arg(idx) => {
-                compiler.emit(Instruction::LoadArg(*idx));
-            }
             ValueLocation::Local(pos) => {
                 compiler.emit(Instruction::GetLocal(*pos));
             }
@@ -57,6 +53,12 @@ impl ValueLocation {
 struct MacroDef {
     params: Vec<String>,
     body: SourceExpr,
+}
+
+// Helper struct for parsed parameters (supports variadic syntax)
+struct ParsedParams {
+    required: Vec<String>,
+    rest: Option<String>,
 }
 
 pub struct Compiler {
@@ -1168,25 +1170,99 @@ impl Compiler {
             }
         };
 
-        // Determine if this is old-style (single clause) or new-style (multi-clause)
-        // Old: (defun name (params) body) - 4 elements, items[2] is a list of symbols
-        // New: (defun name ((pattern) body) ...) - 3+ elements, items[2] is a list starting with list
-
-        let is_old_style = items.len() == 4 &&
-            matches!(&items[2].expr, LispExpr::List(params) if
-                params.iter().all(|p| matches!(&p.expr, LispExpr::Symbol(_))));
-
-        if is_old_style {
-            // Old single-clause style: (defun name (params) body)
-            self.compile_single_clause_defun(&fn_name, &items[2], &items[3])
-        } else {
-            // New multi-clause style: (defun name ((pattern1) body1) ((pattern2) body2) ...)
-            let clauses: Vec<&SourceExpr> = items[2..].iter().collect();
-            self.compile_multi_clause_defun(&fn_name, &clauses, &items[1].location)
+        // Simple defun: (defun name (params) body)
+        // Supports both regular and variadic parameters: (a b) or (a b . rest)
+        if items.len() != 4 {
+            return Err(CompileError::new(
+                "defun requires exactly 4 elements: (defun name (params) body)".to_string(),
+                items[0].location.clone(),
+            ));
         }
 
-// ==================== PATTERN MATCHING ====================
+        self.compile_single_clause_defun(&fn_name, &items[2], &items[3])
+    }
 
+    // Parse parameter list, detecting variadic syntax (a b . rest)
+    fn parse_params(params_expr: &SourceExpr) -> Result<ParsedParams, CompileError> {
+        match &params_expr.expr {
+            // Dotted list: (a b . rest) - parser already separated them for us
+            LispExpr::DottedList(required_params, rest_param) => {
+                let mut required = Vec::new();
+                for param in required_params {
+                    match &param.expr {
+                        LispExpr::Symbol(s) => required.push(s.clone()),
+                        _ => {
+                            return Err(CompileError::new(
+                                "Parameter must be a symbol".to_string(),
+                                param.location.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                // Extract rest parameter name
+                let rest = match &rest_param.expr {
+                    LispExpr::Symbol(s) => Some(s.clone()),
+                    _ => {
+                        return Err(CompileError::new(
+                            "Rest parameter must be a symbol".to_string(),
+                            rest_param.location.clone(),
+                        ));
+                    }
+                };
+
+                Ok(ParsedParams { required, rest })
+            }
+
+            // Regular list: (a b c) or special case (. rest) for zero required params
+            LispExpr::List(params) => {
+                // Special case: (. rest) for zero required parameters
+                if params.len() == 2 {
+                    if let LispExpr::Symbol(s) = &params[0].expr {
+                        if s == "." {
+                            // This is (. rest) syntax
+                            match &params[1].expr {
+                                LispExpr::Symbol(rest_name) => {
+                                    return Ok(ParsedParams {
+                                        required: Vec::new(),
+                                        rest: Some(rest_name.clone()),
+                                    });
+                                }
+                                _ => {
+                                    return Err(CompileError::new(
+                                        "Rest parameter must be a symbol".to_string(),
+                                        params[1].location.clone(),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Regular parameter list
+                let mut required = Vec::new();
+                for param in params {
+                    match &param.expr {
+                        LispExpr::Symbol(s) => required.push(s.clone()),
+                        _ => {
+                            return Err(CompileError::new(
+                                "Parameter must be a symbol".to_string(),
+                                param.location.clone(),
+                            ));
+                        }
+                    }
+                }
+
+                Ok(ParsedParams { required, rest: None })
+            }
+
+            _ => {
+                Err(CompileError::new(
+                    "Parameters must be a list".to_string(),
+                    params_expr.location.clone(),
+                ))
+            }
+        }
     }
 
     // Compile old-style single-clause defun
@@ -1196,29 +1272,14 @@ impl Compiler {
         params_expr: &SourceExpr,
         body_expr: &SourceExpr,
     ) -> Result<(), CompileError> {
-        // Extract parameters
-        let params = match &params_expr.expr {
-            LispExpr::List(p) => p,
-            _ => {
-                return Err(CompileError::new(
-                    "Parameters must be a list".to_string(),
-                    params_expr.location.clone(),
-                ));
-            }
-        };
+        // Parse parameters (handles both regular and variadic)
+        let parsed_params = Self::parse_params(params_expr)?;
 
-        let param_names: Result<Vec<String>, CompileError> = params
-            .iter()
-            .map(|p| match &p.expr {
-                LispExpr::Symbol(s) => Ok(s.clone()),
-                _ => Err(CompileError::new(
-                    "Parameter must be a symbol".to_string(),
-                    p.location.clone(),
-                )),
-            })
-            .collect();
-
-        let param_names = param_names?;
+        // Build complete param list for compilation context
+        let mut all_params = parsed_params.required.clone();
+        if let Some(ref rest_name) = parsed_params.rest {
+            all_params.push(rest_name.clone());
+        }
 
         // Save current compilation context
         let saved_bytecode = std::mem::take(&mut self.bytecode);
@@ -1228,9 +1289,14 @@ impl Compiler {
 
         // Set up new context for function
         self.bytecode = Vec::new();
-        self.param_names = param_names;
+        self.param_names = all_params;
         self.instruction_address = 0;
         self.in_tail_position = true; // Function body is in tail position
+
+        // If variadic, emit PackRestArgs at the start of function
+        if parsed_params.rest.is_some() {
+            self.emit(Instruction::PackRestArgs(parsed_params.required.len()));
+        }
 
         // Compile function body
         self.compile_expr(body_expr)?;
@@ -1251,328 +1317,7 @@ impl Compiler {
         Ok(())
     }
 
-    // Compile new-style multi-clause defun
-    fn compile_multi_clause_defun(
-        &mut self,
-        fn_name: &str,
-        clauses: &[&SourceExpr],
-        name_location: &Location,
-    ) -> Result<(), CompileError> {
-        if clauses.is_empty() {
-            return Err(CompileError::new(
-                "defun requires at least one clause".to_string(),
-                name_location.clone(),
-            ));
-        }
-
-        // Parse all clauses to extract patterns and bodies
-        // We need to handle two cases:
-        // 1. Pattern list: (defun foo ((a b) body)) - clause_items[0] is a List
-        // 2. Single dotted pattern: (defun foo ((a . b) body)) - clause_items[0] is a DottedList
-
-        // First collect owned pattern vecs for dotted list cases
-        let mut owned_patterns: Vec<Vec<SourceExpr>> = Vec::new();
-
-        for clause in clauses {
-            let clause_items = match &clause.expr {
-                LispExpr::List(items) => items,
-                _ => {
-                    return Err(CompileError::new(
-                        "Each clause must be a list ((pattern...) body)".to_string(),
-                        clause.location.clone(),
-                    ));
-                }
-            };
-
-            if clause_items.len() != 2 {
-                return Err(CompileError::new(
-                    "Each clause must have exactly 2 elements: (pattern body)".to_string(),
-                    clause.location.clone(),
-                ));
-            }
-
-            // If it's a dotted list, wrap it as a single-element pattern vec
-            if matches!(&clause_items[0].expr, LispExpr::DottedList(_,_)) {
-                owned_patterns.push(vec![clause_items[0].clone()]);
-            }
-        }
-
-        // Now build parsed_clauses with proper references
-        let mut dotted_idx = 0;
-        let mut parsed_clauses: Vec<(&Vec<SourceExpr>, &SourceExpr)> = Vec::new();
-
-        for clause in clauses {
-            let clause_items = match &clause.expr {
-                LispExpr::List(items) => items,
-                _ => unreachable!(),
-            };
-
-            match &clause_items[0].expr {
-                LispExpr::List(p) => {
-                    parsed_clauses.push((p, &clause_items[1]));
-                }
-                LispExpr::DottedList(_,_) => {
-                    parsed_clauses.push((&owned_patterns[dotted_idx], &clause_items[1]));
-                    dotted_idx += 1;
-                }
-                _ => {
-                    return Err(CompileError::new(
-                        "Pattern tuple must be a list or dotted list".to_string(),
-                        clause_items[0].location.clone(),
-                    ));
-                }
-            }
-        }
-
-        // Find maximum arity among all clauses (for param_names setup)
-        let max_arity = parsed_clauses.iter()
-            .map(|(patterns, _)| patterns.len())
-            .max()
-            .unwrap_or(0);
-
-        // Save current compilation context
-        let saved_bytecode = std::mem::take(&mut self.bytecode);
-        let saved_params = std::mem::take(&mut self.param_names);
-        let saved_address = self.instruction_address;
-        let saved_tail_position = self.in_tail_position;
-
-        // Set up new context for function
-        self.bytecode = Vec::new();
-        self.param_names = (0..max_arity).map(|i| format!("__arg{}", i)).collect();
-        self.instruction_address = 0;
-        self.in_tail_position = true; // Pattern clause bodies are in tail position
-
-        // Compile pattern matching dispatch
-        self.compile_pattern_dispatch(&parsed_clauses)?;
-
-        // Emit error if no clause matched
-        // For now, just emit a halt (will panic at runtime)
-        self.emit(Instruction::Halt);
-
-        // Store compiled function
-        let fn_bytecode = std::mem::take(&mut self.bytecode);
-        self.functions.insert(fn_name.to_string(), fn_bytecode);
-
-        // Restore context
-        self.bytecode = saved_bytecode;
-        self.param_names = saved_params;
-        self.instruction_address = saved_address;
-        self.in_tail_position = saved_tail_position;
-
-        Ok(())
-    }
-
-    // Helper to compile a single pattern match
-    // Emits code to test if the value at the given location matches the pattern
-    // Returns bindings created by this pattern
-    // If is_last_clause is false, emits JmpIfFalse instructions and returns their indices for patching
-    fn compile_single_pattern(
-        &mut self,
-        pattern: &SourceExpr,
-        value_location: ValueLocation,
-        is_last_clause: bool,
-        bindings: &mut Vec<(String, ValueLocation)>,
-        jmp_indices: &mut Vec<usize>,
-    ) -> Result<(), CompileError> {
-        match &pattern.expr {
-            // Literal patterns: must match exactly
-            LispExpr::Number(n) => {
-                value_location.emit_load(self);
-                self.emit(Instruction::Push(Value::Integer(*n)));
-                self.emit(Instruction::Eq);
-                if !is_last_clause {
-                    jmp_indices.push(self.bytecode.len());
-                    self.emit(Instruction::JmpIfFalse(0));
-                }
-            }
-
-            LispExpr::Boolean(b) => {
-                value_location.emit_load(self);
-                self.emit(Instruction::Push(Value::Boolean(*b)));
-                self.emit(Instruction::Eq);
-                if !is_last_clause {
-                    jmp_indices.push(self.bytecode.len());
-                    self.emit(Instruction::JmpIfFalse(0));
-                }
-            }
-
-            // Variable patterns: always match, bind to name
-            LispExpr::Symbol(s) if s != "_" => {
-                bindings.push((s.clone(), value_location));
-            }
-
-            // Wildcard pattern: always match, don't bind
-            LispExpr::Symbol(s) if s == "_" => {
-                // No code needed
-            }
-
-            // List patterns
-            LispExpr::List(items) => {
-                // Check if this is a quoted expression (quote ...)
-                if items.len() == 2 {
-                    if let LispExpr::Symbol(s) = &items[0].expr {
-                        if s == "quote" {
-                            // Quoted pattern - match exact value
-                            let quoted_value = self.expr_to_value(&items[1])?;
-                            value_location.emit_load(self);
-                            self.emit(Instruction::Push(quoted_value));
-                            self.emit(Instruction::Eq);
-                            if !is_last_clause {
-                                jmp_indices.push(self.bytecode.len());
-                                self.emit(Instruction::JmpIfFalse(0));
-                            }
-                            return Ok(());
-                        }
-                    }
-                }
-
-                // Fixed-length list pattern: (a b c)
-                if !is_last_clause {
-                    // Check that value is a list
-                    value_location.emit_load(self);
-                    self.emit(Instruction::IsList);
-                    jmp_indices.push(self.bytecode.len());
-                    self.emit(Instruction::JmpIfFalse(0));
-                }
-
-                // TODO: Check length matches expected length
-                // For now, pattern matching will fail at runtime if lengths don't match
-
-                // Extract and match each element
-                for (i, item_pattern) in items.iter().enumerate() {
-                    // Load list, extract i-th element using car/cdr
-                    let elem_location = ValueLocation::ListElement(Box::new(value_location.clone()), i);
-                    self.compile_single_pattern(
-                        item_pattern,
-                        elem_location,
-                        is_last_clause,
-                        bindings,
-                        jmp_indices,
-                    )?;
-                }
-            }
-
-            // Dotted list pattern: (h . t)
-            LispExpr::DottedList(items, rest) => {
-                if !is_last_clause {
-                    // Check that value is a list
-                    value_location.emit_load(self);
-                    self.emit(Instruction::IsList);
-                    jmp_indices.push(self.bytecode.len());
-                    self.emit(Instruction::JmpIfFalse(0));
-
-                    // Check that list is not empty
-                    value_location.emit_load(self);
-                    self.emit(Instruction::Push(Value::List(vec![])));
-                    self.emit(Instruction::Neq); // NOT equal to empty
-                    jmp_indices.push(self.bytecode.len());
-                    self.emit(Instruction::JmpIfFalse(0));
-                }
-
-                // Match head elements
-                for (i, item_pattern) in items.iter().enumerate() {
-                    let elem_location = ValueLocation::ListElement(Box::new(value_location.clone()), i);
-                    self.compile_single_pattern(
-                        item_pattern,
-                        elem_location,
-                        is_last_clause,
-                        bindings,
-                        jmp_indices,
-                    )?;
-                }
-
-                // Match rest (cdr after skipping head items)
-                let rest_location = ValueLocation::ListRest(Box::new(value_location.clone()), items.len());
-                self.compile_single_pattern(
-                    rest,
-                    rest_location,
-                    is_last_clause,
-                    bindings,
-                    jmp_indices,
-                )?;
-            }
-
-            _ => {
-                return Err(CompileError::new(
-                    format!("Unsupported pattern type: {:?}", pattern.expr),
-                    pattern.location.clone(),
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    // Compile pattern matching dispatch for multiple clauses
-    fn compile_pattern_dispatch(
-        &mut self,
-        clauses: &[(&Vec<SourceExpr>, &SourceExpr)],
-    ) -> Result<(), CompileError> {
-        for (i, (patterns, body)) in clauses.iter().enumerate() {
-            let is_last_clause = i == clauses.len() - 1;
-
-            // Emit arity check at the start of this clause
-            let arity = patterns.len();
-            let arity_check_idx = if !is_last_clause {
-                let idx = self.bytecode.len();
-                self.emit(Instruction::CheckArity(arity, 0)); // Placeholder jump address
-                Some(idx)
-            } else {
-                // Last clause doesn't need arity check - if we get here, no other clause matched
-                None
-            };
-
-            // For each pattern in this clause, generate matching code
-            let mut bindings: Vec<(String, ValueLocation)> = Vec::new();
-            let mut jmp_indices = Vec::new(); // Indices of JmpIfFalse to patch
-
-            for (arg_idx, pattern) in patterns.iter().enumerate() {
-                self.compile_single_pattern(
-                    pattern,
-                    ValueLocation::Arg(arg_idx),
-                    is_last_clause,
-                    &mut bindings,
-                    &mut jmp_indices,
-                )?;
-            }
-
-            // If all patterns matched, execute body with bindings
-            let saved_bindings = self.pattern_bindings.clone();
-
-            // Set up pattern bindings for this clause
-            self.pattern_bindings.clear();
-            for (var_name, location) in bindings {
-                self.pattern_bindings.insert(var_name, location);
-            }
-
-            // Compile body
-            self.compile_expr(body)?;
-            self.emit(Instruction::Ret);
-
-            // Restore bindings
-            self.pattern_bindings = saved_bindings;
-
-            // Patch jump instructions to jump to next clause
-            if !is_last_clause {
-                let next_clause_addr = self.bytecode.len();
-
-                // Patch arity check jump
-                if let Some(idx) = arity_check_idx {
-                    self.bytecode[idx] = Instruction::CheckArity(arity, next_clause_addr);
-                }
-
-                // Patch pattern match jumps
-                for jmp_idx in jmp_indices {
-                    self.bytecode[jmp_idx] = Instruction::JmpIfFalse(next_clause_addr);
-                }
-            }
-
 // ==================== SPECIAL FORMS (LET, COND, AND, OR) ====================
-
-        }
-
-        Ok(())
-    }
 
     // Compile let expression: (let ((pattern value) ...) body)
     fn compile_let(
@@ -1914,33 +1659,17 @@ impl Compiler {
         params_expr: &SourceExpr,
         body_expr: &SourceExpr,
     ) -> Result<(), CompileError> {
-        // Parse parameters
-        let params = match &params_expr.expr {
-            LispExpr::List(p) => {
-                let mut param_names = Vec::new();
-                for param in p {
-                    match &param.expr {
-                        LispExpr::Symbol(s) => param_names.push(s.clone()),
-                        _ => {
-                            return Err(CompileError::new(
-                                "Lambda parameters must be symbols".to_string(),
-                                param.location.clone(),
-                            ));
-                        }
-                    }
-                }
-                param_names
-            }
-            _ => {
-                return Err(CompileError::new(
-                    "Lambda parameters must be a list".to_string(),
-                    params_expr.location.clone(),
-                ));
-            }
-        };
+        // Parse parameters (handles both regular and variadic)
+        let parsed_params = Self::parse_params(params_expr)?;
 
-        // Find free variables in body (variables not in params)
-        let free_vars = self.find_free_variables(body_expr, &params);
+        // Build complete param list for compilation context
+        let mut all_params = parsed_params.required.clone();
+        if let Some(ref rest_name) = parsed_params.rest {
+            all_params.push(rest_name.clone());
+        }
+
+        // Find free variables in body (variables not in all_params)
+        let free_vars = self.find_free_variables(body_expr, &all_params);
 
         // Save current compilation context
         let saved_bytecode = std::mem::take(&mut self.bytecode);
@@ -1953,7 +1682,7 @@ impl Compiler {
 
         // Set up new context for closure body
         self.bytecode = Vec::new();
-        self.param_names = params.clone();
+        self.param_names = all_params.clone();
         self.instruction_address = 0;
         self.local_bindings.clear();
         self.pattern_bindings.clear();
@@ -1987,8 +1716,17 @@ impl Compiler {
             self.compile_variable_load(var_name)?;
         }
 
-        // Emit MakeClosure instruction
-        self.emit(Instruction::MakeClosure(params, body_bytecode, free_vars.len()));
+        // Emit appropriate closure instruction based on whether it's variadic
+        match parsed_params.rest {
+            None => {
+                // Regular closure
+                self.emit(Instruction::MakeClosure(parsed_params.required, body_bytecode, free_vars.len()));
+            }
+            Some(rest_name) => {
+                // Variadic closure
+                self.emit(Instruction::MakeVariadicClosure(parsed_params.required, rest_name, body_bytecode, free_vars.len()));
+            }
+        }
 
         Ok(())
     }
@@ -2550,7 +2288,7 @@ impl Compiler {
             // Comparison
             "<=" | "<" | ">" | ">=" | "==" | "!=" |
             // List operations
-            "cons" | "car" | "cdr" | "list?" | "append" | "list-ref" | "list-length" |
+            "cons" | "car" | "cdr" | "list?" | "append" | "list-ref" | "list-length" | "null?" |
             // Type predicates
             "integer?" | "boolean?" | "function?" | "closure?" | "procedure?" | "number?" |
             // String operations

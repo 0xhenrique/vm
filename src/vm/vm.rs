@@ -61,6 +61,7 @@ impl VM {
         self.functions.insert("append".to_string(), vec![LoadArg(0), LoadArg(1), Append, Ret]);
         self.functions.insert("list-ref".to_string(), vec![LoadArg(0), LoadArg(1), ListRef, Ret]);
         self.functions.insert("list-length".to_string(), vec![LoadArg(0), ListLength, Ret]);
+        self.functions.insert("null?".to_string(), vec![LoadArg(0), ListLength, Push(Value::Integer(0)), Eq, Ret]);
 
         // Type predicates
         self.functions.insert("integer?".to_string(), vec![LoadArg(0), IsInteger, Ret]);
@@ -93,6 +94,7 @@ impl VM {
         // Other operations
         self.functions.insert("get-args".to_string(), vec![GetArgs, Ret]);
         self.functions.insert("print".to_string(), vec![LoadArg(0), Print, Ret]);
+        self.functions.insert("apply".to_string(), vec![LoadArg(0), LoadArg(1), Apply, Ret]);
 
         // HashMap operations
         self.functions.insert("hashmap?".to_string(), vec![LoadArg(0), IsHashMap, Ret]);
@@ -386,6 +388,26 @@ impl VM {
                     self.instruction_pointer += 1;
                 }
             }
+            Instruction::PackRestArgs(required_count) => {
+                // Collect args from required_count onwards into a list
+                // Replace them with a single list in frame.locals
+                let frame = self.call_stack.last_mut().ok_or_else(|| RuntimeError::new("No frame for PackRestArgs".to_string()))?;
+
+                if frame.locals.len() < required_count {
+                    return Err(RuntimeError::new(format!(
+                        "Not enough arguments: expected at least {}, got {}",
+                        required_count,
+                        frame.locals.len()
+                    )));
+                }
+
+                // Collect rest args into a list
+                let rest_args: Vec<Value> = frame.locals.drain(required_count..).collect();
+                // Push the rest list as the next parameter
+                frame.locals.push(Value::List(rest_args));
+
+                self.instruction_pointer += 1;
+            }
             Instruction::MakeClosure(params, body, num_captured) => {
                 // Pop captured values from stack (compiler pushed them in order)
                 let mut captured_values = Vec::new();
@@ -405,6 +427,32 @@ impl VM {
 
                 let closure = Value::Closure {
                     params: params.clone(),
+                    rest_param: None, // Regular closure, no variadic support
+                    body: body.clone(),
+                    captured,
+                };
+
+                self.value_stack.push(closure);
+                self.instruction_pointer += 1;
+            }
+            Instruction::MakeVariadicClosure(required_params, rest_param, body, num_captured) => {
+                // Pop captured values from stack (compiler pushed them in order)
+                let mut captured_values = Vec::new();
+                for _ in 0..num_captured {
+                    captured_values.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during MakeVariadicClosure".to_string()))?);
+                }
+                captured_values.reverse(); // They were pushed in order, so reverse after popping
+
+                // Create closure with captured values
+                let captured: Vec<(String, Value)> = captured_values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, v)| (format!("__captured_{}", i), v))
+                    .collect();
+
+                let closure = Value::Closure {
+                    params: required_params.clone(),
+                    rest_param: Some(rest_param.clone()), // Variadic closure
                     body: body.clone(),
                     captured,
                 };
@@ -443,14 +491,32 @@ impl VM {
                         self.current_bytecode = fn_bytecode;
                         self.instruction_pointer = 0;
                     }
-                    Value::Closure { params, body, captured } => {
+                    Value::Closure { params, rest_param, body, captured } => {
                         // Verify arity
-                        if params.len() != args.len() {
-                            return Err(RuntimeError::new(format!(
-                                "Closure arity mismatch: expected {} argument(s), got {}",
-                                params.len(),
-                                args.len()
-                            )));
+                        match &rest_param {
+                            None => {
+                                // Regular closure - exact arity match required
+                                if params.len() != args.len() {
+                                    return Err(RuntimeError::new(format!(
+                                        "Closure arity mismatch: expected {} argument(s), got {}",
+                                        params.len(),
+                                        args.len()
+                                    )));
+                                }
+                            }
+                            Some(_rest_name) => {
+                                // Variadic closure - need at least the required params
+                                if args.len() < params.len() {
+                                    return Err(RuntimeError::new(format!(
+                                        "Variadic closure arity mismatch: expected at least {} argument(s), got {}",
+                                        params.len(),
+                                        args.len()
+                                    )));
+                                }
+                                // Pack extra args into a list and append to args
+                                let rest_args: Vec<Value> = args.drain(params.len()..).collect();
+                                args.push(Value::List(rest_args));
+                            }
                         }
 
                         // Create frame with arguments and captured environment
@@ -472,6 +538,100 @@ impl VM {
                     _ => {
                         return Err(RuntimeError::new(format!(
                             "Type error: expected function or closure, got {}",
+                            Self::type_name(&callable)
+                        )));
+                    }
+                }
+            }
+            Instruction::Apply => {
+                // Apply function to a list of arguments
+                // Stack: ... <function/closure> <list> (top)
+
+                // Pop the argument list
+                let arg_list = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Apply".to_string()))?;
+
+                // Extract arguments from list
+                let args = match arg_list {
+                    Value::List(items) => items,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error in apply: expected list of arguments, got {}",
+                            Self::type_name(&arg_list)
+                        )));
+                    }
+                };
+
+                // Pop the function/closure
+                let callable = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Apply".to_string()))?;
+
+                match callable {
+                    Value::Function(fn_name) => {
+                        // Call a named function
+                        let fn_bytecode = self.functions.get(&fn_name)
+                            .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
+                            .clone();
+
+                        let frame = Frame {
+                            return_address: self.instruction_pointer + 1,
+                            locals: args,
+                            return_bytecode: self.current_bytecode.clone(),
+                            function_name: fn_name.clone(),
+                            captured: Vec::new(),
+                            stack_base: self.value_stack.len(),
+                        };
+                        self.call_stack.push(frame);
+
+                        self.current_bytecode = fn_bytecode;
+                        self.instruction_pointer = 0;
+                    }
+                    Value::Closure { params, rest_param, body, captured } => {
+                        // Call a closure with variadic support
+                        let mut args = args;
+
+                        // Verify arity and handle variadic parameters
+                        match &rest_param {
+                            None => {
+                                // Regular closure - exact arity match required
+                                if params.len() != args.len() {
+                                    return Err(RuntimeError::new(format!(
+                                        "Closure arity mismatch in apply: expected {} argument(s), got {}",
+                                        params.len(),
+                                        args.len()
+                                    )));
+                                }
+                            }
+                            Some(_rest_name) => {
+                                // Variadic closure - need at least the required params
+                                if args.len() < params.len() {
+                                    return Err(RuntimeError::new(format!(
+                                        "Variadic closure arity mismatch in apply: expected at least {} argument(s), got {}",
+                                        params.len(),
+                                        args.len()
+                                    )));
+                                }
+                                // Pack extra arguments into a list for the rest parameter
+                                let rest_args: Vec<Value> = args.drain(params.len()..).collect();
+                                args.push(Value::List(rest_args));
+                            }
+                        }
+
+                        let frame = Frame {
+                            return_address: self.instruction_pointer + 1,
+                            locals: args,
+                            return_bytecode: self.current_bytecode.clone(),
+                            function_name: format!("<closure@{:p}>", &params), // Unique identifier for closures
+                            captured: captured.iter().map(|(_, v)| v.clone()).collect(),
+                            stack_base: self.value_stack.len(),
+                        };
+                        self.call_stack.push(frame);
+
+                        // Switch to closure body bytecode
+                        self.current_bytecode = body;
+                        self.instruction_pointer = 0;
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error in apply: expected function or closure, got {}",
                             Self::type_name(&callable)
                         )));
                     }

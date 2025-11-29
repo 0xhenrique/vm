@@ -9,7 +9,7 @@ fn compile_and_run(source: &str) -> VM {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
     vm
@@ -46,18 +46,20 @@ fn get_list_result(vm: &VM) -> Vec<Value> {
 #[test]
 fn test_length() {
     let source = r#"
-        (defun length
-          (('()) 0)
-          (((h . t)) (+ 1 (length t))))
+        (defun length (lst)
+          (if (null? lst)
+              0
+              (+ 1 (length (cdr lst)))))
         (length '(1 2 3 4 5))
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_int_result(&vm), 5);
 
     let source = r#"
-        (defun length
-          (('()) 0)
-          (((h . t)) (+ 1 (length t))))
+        (defun length (lst)
+          (if (null? lst)
+              0
+              (+ 1 (length (cdr lst)))))
         (length '())
     "#;
     let vm = compile_and_run(source);
@@ -67,20 +69,20 @@ fn test_length() {
 #[test]
 fn test_nth() {
     let source = r#"
-        (defun nth
-          ((0 (h . t)) h)
-          ((n (h . t)) (nth (- n 1) t))
-          ((n '()) '()))
+        (defun nth (n lst)
+          (if (== n 0)
+              (car lst)
+              (nth (- n 1) (cdr lst))))
         (nth 0 '(10 20 30))
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_int_result(&vm), 10);
 
     let source = r#"
-        (defun nth
-          ((0 (h . t)) h)
-          ((n (h . t)) (nth (- n 1) t))
-          ((n '()) '()))
+        (defun nth (n lst)
+          (if (== n 0)
+              (car lst)
+              (nth (- n 1) (cdr lst))))
         (nth 2 '(10 20 30))
     "#;
     let vm = compile_and_run(source);
@@ -90,10 +92,12 @@ fn test_nth() {
 #[test]
 fn test_last() {
     let source = r#"
-        (defun last
-          (((h . '())) h)
-          (((h . t)) (last t))
-          (('()) '()))
+        (defun last (lst)
+          (if (null? lst)
+              '()
+              (if (null? (cdr lst))
+                  (car lst)
+                  (last (cdr lst)))))
         (last '(1 2 3 4 5))
     "#;
     let vm = compile_and_run(source);
@@ -103,9 +107,10 @@ fn test_last() {
 #[test]
 fn test_reverse() {
     let source = r#"
-        (defun reverse-helper
-          ((acc '()) acc)
-          ((acc (h . t)) (reverse-helper (cons h acc) t)))
+        (defun reverse-helper (acc lst)
+          (if (null? lst)
+              acc
+              (reverse-helper (cons (car lst) acc) (cdr lst))))
         (defun reverse (lst)
           (reverse-helper '() lst))
         (reverse '(1 2 3))
@@ -121,9 +126,10 @@ fn test_reverse() {
 #[test]
 fn test_append() {
     let source = r#"
-        (defun append
-          (('() ys) ys)
-          (((h . t) ys) (cons h (append t ys))))
+        (defun append (xs ys)
+          (if (null? xs)
+              ys
+              (cons (car xs) (append (cdr xs) ys))))
         (append '(1 2) '(3 4))
     "#;
     let vm = compile_and_run(source);
@@ -165,14 +171,14 @@ fn test_abs() {
 #[test]
 fn test_min() {
     let source = r#"
-        (defun min ((a b) (if (< a b) a b)))
+        (defun min (a b) (if (< a b) a b))
         (min 3 5)
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_int_result(&vm), 3);
 
     let source = r#"
-        (defun min ((a b) (if (< a b) a b)))
+        (defun min (a b) (if (< a b) a b))
         (min 5 3)
     "#;
     let vm = compile_and_run(source);
@@ -182,14 +188,14 @@ fn test_min() {
 #[test]
 fn test_max() {
     let source = r#"
-        (defun max ((a b) (if (> a b) a b)))
+        (defun max (a b) (if (> a b) a b))
         (max 3 5)
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_int_result(&vm), 5);
 
     let source = r#"
-        (defun max ((a b) (if (> a b) a b)))
+        (defun max (a b) (if (> a b) a b))
         (max 5 3)
     "#;
     let vm = compile_and_run(source);
@@ -199,36 +205,42 @@ fn test_max() {
 #[test]
 fn test_even_odd() {
     let source = r#"
-        (defun even?
-          ((0) true)
-          ((1) false)
-          ((n) (if (< n 0)
-                 (even? (- 0 n))
-                 (even? (- n 2)))))
+        (defun even? (n)
+          (if (== n 0)
+              true
+              (if (== n 1)
+                  false
+                  (if (< n 0)
+                      (even? (- 0 n))
+                      (even? (- n 2))))))
         (even? 4)
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_bool_result(&vm), true);
 
     let source = r#"
-        (defun even?
-          ((0) true)
-          ((1) false)
-          ((n) (if (< n 0)
-                 (even? (- 0 n))
-                 (even? (- n 2)))))
+        (defun even? (n)
+          (if (== n 0)
+              true
+              (if (== n 1)
+                  false
+                  (if (< n 0)
+                      (even? (- 0 n))
+                      (even? (- n 2))))))
         (even? 3)
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_bool_result(&vm), false);
 
     let source = r#"
-        (defun even?
-          ((0) true)
-          ((1) false)
-          ((n) (if (< n 0)
-                 (even? (- 0 n))
-                 (even? (- n 2)))))
+        (defun even? (n)
+          (if (== n 0)
+              true
+              (if (== n 1)
+                  false
+                  (if (< n 0)
+                      (even? (- 0 n))
+                      (even? (- n 2))))))
         (defun odd? (n)
           (if (even? n) false true))
         (odd? 3)
@@ -256,7 +268,7 @@ fn test_compose() {
     let source = r#"
         (defun add1 (x) (+ x 1))
         (defun double (x) (* x 2))
-        (defun compose ((f g) (lambda (x) (f (g x)))))
+        (defun compose (f g) (lambda (x) (f (g x))))
         ((compose (lambda (x) (+ x 1)) (lambda (x) (* x 2))) 5)
     "#;
     let vm = compile_and_run(source);
@@ -267,7 +279,7 @@ fn test_compose() {
 fn test_partial() {
     let source = r#"
         (defun add (a b) (+ a b))
-        (defun partial ((f arg) (lambda (x) (f arg x))))
+        (defun partial (f arg) (lambda (x) (f arg x)))
         ((partial (lambda (a b) (+ a b)) 10) 5)
     "#;
     let vm = compile_and_run(source);
@@ -281,9 +293,11 @@ fn test_partial() {
 #[test]
 fn test_map() {
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
         (map (lambda (x) (* x 2)) '(1 2 3))
     "#;
     let vm = compile_and_run(source);
@@ -297,12 +311,12 @@ fn test_map() {
 #[test]
 fn test_filter() {
     let source = r#"
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
         (filter (lambda (x) (> x 2)) '(1 2 3 4 5))
     "#;
     let vm = compile_and_run(source);
@@ -316,9 +330,10 @@ fn test_filter() {
 #[test]
 fn test_reduce() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
         (reduce (lambda (acc x) (+ acc x)) 0 '(1 2 3 4 5))
     "#;
     let vm = compile_and_run(source);
@@ -332,12 +347,15 @@ fn test_reduce() {
 #[test]
 fn test_sum_of_squares() {
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
         (reduce (lambda (acc x) (+ acc x))
                 0
                 (map (lambda (x) (* x x)) '(1 2 3 4)))
@@ -349,21 +367,24 @@ fn test_sum_of_squares() {
 #[test]
 fn test_filter_and_sum() {
     let source = r#"
-        (defun even?
-          ((0) true)
-          ((1) false)
-          ((n) (if (< n 0)
-                 (even? (- 0 n))
-                 (even? (- n 2)))))
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun even? (n)
+          (if (== n 0)
+              true
+              (if (== n 1)
+                  false
+                  (if (< n 0)
+                      (even? (- 0 n))
+                      (even? (- n 2))))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
         (reduce (lambda (acc x) (+ acc x))
                 0
                 (filter (lambda (x) (even? x)) '(1 2 3 4 5 6 7 8)))
@@ -394,18 +415,14 @@ fn test_not_helper() {
 #[test]
 fn test_null_predicate() {
     let source = r#"
-        (defun null?
-          (('()) true)
-          ((x) false))
+        ; null? is already a builtin, but we can test the behavior
         (null? '())
     "#;
     let vm = compile_and_run(source);
     assert_eq!(get_bool_result(&vm), true);
 
     let source = r#"
-        (defun null?
-          (('()) true)
-          ((x) false))
+        ; null? is already a builtin, but we can test the behavior
         (null? '(1 2 3))
     "#;
     let vm = compile_and_run(source);
@@ -415,21 +432,24 @@ fn test_null_predicate() {
 #[test]
 fn test_list_length_with_filter() {
     let source = r#"
-        (defun even?
-          ((0) true)
-          ((1) false)
-          ((n) (if (< n 0)
-                 (even? (- 0 n))
-                 (even? (- n 2)))))
-        (defun length
-          (('()) 0)
-          (((h . t)) (+ 1 (length t))))
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun even? (n)
+          (if (== n 0)
+              true
+              (if (== n 1)
+                  false
+                  (if (< n 0)
+                      (even? (- 0 n))
+                      (even? (- n 2))))))
+        (defun length (lst)
+          (if (null? lst)
+              0
+              (+ 1 (length (cdr lst)))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
         (length (filter (lambda (x) (even? x)) '(1 2 3 4 5 6 7 8 9 10)))
     "#;
     let vm = compile_and_run(source);

@@ -8,7 +8,7 @@ fn compile_and_get_result(source: &str) -> i64 {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -380,7 +380,7 @@ fn test_quote_empty_list() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -399,7 +399,7 @@ fn test_quote_list() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -436,7 +436,7 @@ fn test_list_predicate() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -450,7 +450,7 @@ fn test_list_predicate() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -495,7 +495,7 @@ fn test_quoted_symbols() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -514,7 +514,7 @@ fn test_string_literals() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -533,7 +533,7 @@ fn test_symbol_string_conversion() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -547,7 +547,7 @@ fn test_symbol_string_conversion() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -559,9 +559,11 @@ fn test_map_basic() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
 
         (map (lambda (x) (* x 2)) '(1 2 3 4 5))
     "#;
@@ -572,7 +574,7 @@ fn test_map_basic() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -591,9 +593,11 @@ fn test_map_empty_list() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
 
         (map (lambda (x) (+ x 1)) '())
     "#;
@@ -604,7 +608,7 @@ fn test_map_empty_list() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -616,12 +620,12 @@ fn test_filter_basic() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
         (filter (lambda (x) (> x 2)) '(1 2 3 4 5))
     "#;
@@ -632,7 +636,7 @@ fn test_filter_basic() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -649,12 +653,12 @@ fn test_filter_all_pass() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
         (filter (lambda (x) true) '(1 2 3))
     "#;
@@ -665,7 +669,7 @@ fn test_filter_all_pass() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -682,12 +686,12 @@ fn test_filter_none_pass() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
         (filter (lambda (x) false) '(1 2 3))
     "#;
@@ -698,7 +702,7 @@ fn test_filter_none_pass() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -708,9 +712,10 @@ fn test_filter_none_pass() {
 #[test]
 fn test_reduce_sum() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (reduce (lambda (acc x) (+ acc x)) 0 '(1 2 3 4 5))
     "#;
@@ -722,9 +727,10 @@ fn test_reduce_sum() {
 #[test]
 fn test_reduce_product() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (reduce (lambda (acc x) (* acc x)) 1 '(1 2 3 4 5))
     "#;
@@ -736,9 +742,10 @@ fn test_reduce_product() {
 #[test]
 fn test_reduce_empty_list() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (reduce (lambda (acc x) (+ acc x)) 100 '())
     "#;
@@ -752,9 +759,11 @@ fn test_map_with_closure() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
 
         (defun make-adder (n)
           (lambda (x) (+ x n)))
@@ -768,7 +777,7 @@ fn test_map_with_closure() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -785,12 +794,12 @@ fn test_filter_with_closure() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
         (defun make-predicate (threshold)
           (lambda (x) (> x threshold)))
@@ -804,7 +813,7 @@ fn test_filter_with_closure() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -821,16 +830,18 @@ fn test_compose_map_and_filter() {
     use lisp_bytecode_vm::{Compiler, VM, parser::Parser, Value};
 
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
 
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
         (filter (lambda (x) (> x 5))
                 (map (lambda (x) (* x 2)) '(1 2 3 4 5)))
@@ -842,7 +853,7 @@ fn test_compose_map_and_filter() {
     let (functions, main) = compiler.compile_program(&exprs).unwrap();
 
     let mut vm = VM::new();
-    vm.functions = functions;
+    vm.functions.extend(functions);
     vm.current_bytecode = main;
     vm.run().unwrap();
 
@@ -857,20 +868,23 @@ fn test_compose_map_and_filter() {
 #[test]
 fn test_compose_map_filter_reduce() {
     let source = r#"
-        (defun map
-          ((f '()) '())
-          ((f (h . t)) (cons (f h) (map f t))))
+        (defun map (f lst)
+          (if (null? lst)
+              '()
+              (cons (f (car lst))
+                    (map f (cdr lst)))))
 
-        (defun filter
-          ((predicate '()) '())
-          ((predicate (h . t))
-            (if (predicate h)
-              (cons h (filter predicate t))
-              (filter predicate t))))
+        (defun filter (pred lst)
+          (if (null? lst)
+              '()
+              (if (pred (car lst))
+                  (cons (car lst) (filter pred (cdr lst)))
+                  (filter pred (cdr lst)))))
 
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (defun is-even (n)
           (if (< n 2)
@@ -898,9 +912,10 @@ fn test_compose_map_filter_reduce() {
 #[test]
 fn test_reduce_count() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (reduce (lambda (acc x) (+ acc 1)) 0 '(a b c d e))
     "#;
@@ -912,9 +927,10 @@ fn test_reduce_count() {
 #[test]
 fn test_reduce_max() {
     let source = r#"
-        (defun reduce
-          ((f acc '()) acc)
-          ((f acc (h . t)) (reduce f (f acc h) t)))
+        (defun reduce (f init lst)
+          (if (null? lst)
+              init
+              (reduce f (f init (car lst)) (cdr lst))))
 
         (reduce (lambda (a b) (if (> a b) a b)) 0 '(3 7 2 9 4 1))
     "#;
