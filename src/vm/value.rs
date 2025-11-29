@@ -88,7 +88,7 @@ impl List {
     }
 
     /// Iterate over the list
-    pub fn iter(&self) -> ListIter {
+    pub fn iter(&self) -> ListIter<'_> {
         ListIter { current: self }
     }
 }
@@ -128,6 +128,54 @@ impl PartialEq for List {
                     b = &cell_b.tail;
                 }
                 _ => return false,
+            }
+        }
+    }
+}
+
+/// Custom Drop implementation for List to avoid stack overflow with large lists.
+///
+/// Rust's default recursive Drop would create a call stack as deep as the list,
+/// causing stack overflow for lists with 500k+ items. This implementation uses
+/// an iterative approach to walk the list chain without growing the call stack.
+///
+/// Note: If `cell.head` contains a nested large List (Value::List), dropping it
+/// will still use recursion. This is acceptable for most use cases since deeply
+/// nested list structures are uncommon. The primary goal is handling flat lists
+/// with millions of items.
+impl Drop for List {
+    fn drop(&mut self) {
+        // Replace self with Nil, taking ownership of the original value
+        let mut current = std::mem::replace(self, List::Nil);
+
+        loop {
+            // Get pointer to the Arc inside the Cons cell (if it's Cons)
+            let arc_ptr = match &current {
+                List::Nil => {
+                    // Nil - nothing to drop. Forget to prevent recursive drop call.
+                    std::mem::forget(current);
+                    return;
+                }
+                List::Cons(arc) => arc as *const Arc<ConsCell>,
+            };
+
+            // SAFETY: We read the Arc out of current. ptr::read does a bitwise copy
+            // without affecting refcount. We then forget current to prevent it from
+            // dropping the Arc again (which would double-decrement the refcount).
+            let arc = unsafe { std::ptr::read(arc_ptr) };
+            std::mem::forget(current);
+
+            // Try to take sole ownership of the ConsCell
+            match Arc::try_unwrap(arc) {
+                Ok(cell) => {
+                    // We're the only owner - drop head, continue with tail
+                    drop(cell.head);
+                    current = cell.tail;
+                }
+                Err(_arc) => {
+                    // Shared - _arc is dropped here, decrementing refcount
+                    return;
+                }
             }
         }
     }

@@ -350,6 +350,10 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         // Type inspection and symbol generation (114-115)
         Instruction::TypeOf => bytes.push(114),
         Instruction::GenSym => bytes.push(115),
+        // Parallel Collections (116-118)
+        Instruction::PMap => bytes.push(116),
+        Instruction::PFilter => bytes.push(117),
+        Instruction::PReduce => bytes.push(118),
         // Loop/recur instructions (111-113)
         Instruction::SetLocal(pos) => {
             bytes.push(111);
@@ -542,6 +546,10 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         // Type inspection and symbol generation (114-115)
         114 => Ok(Instruction::TypeOf),
         115 => Ok(Instruction::GenSym),
+        // Parallel Collections (116-118)
+        116 => Ok(Instruction::PMap),
+        117 => Ok(Instruction::PFilter),
+        118 => Ok(Instruction::PReduce),
         // Loop/recur instructions (111-113)
         111 => Ok(Instruction::SetLocal(read_u32(bytes, pos)? as usize)),
         112 => Ok(Instruction::BeginLoop(read_u32(bytes, pos)? as usize)),

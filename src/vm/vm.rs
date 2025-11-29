@@ -166,6 +166,11 @@ impl VM {
 
         // Symbol generation
         self.functions.insert("gensym".to_string(), vec![GenSym, Ret]);
+
+        // Parallel Collections (Phase 12a)
+        self.functions.insert("pmap".to_string(), vec![LoadArg(0), LoadArg(1), PMap, Ret]);
+        self.functions.insert("pfilter".to_string(), vec![LoadArg(0), LoadArg(1), PFilter, Ret]);
+        self.functions.insert("preduce".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), PReduce, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -2602,6 +2607,216 @@ impl VM {
                 self.value_stack.push(Value::Symbol(Arc::new(sym)));
                 self.instruction_pointer += 1;
             }
+
+            // ============================================================
+            // Parallel Collections (Phase 12a)
+            // ============================================================
+
+            Instruction::PMap => {
+                use rayon::prelude::*;
+
+                let list = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PMap".to_string()))?;
+                let function = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PMap".to_string()))?;
+
+                match list {
+                    Value::List(items) => {
+                        // Collect items into a vector for parallel processing
+                        let vec: Vec<Value> = items.iter().cloned().collect();
+
+                        // Prepare function data for parallel execution
+                        let (func_bytecode, func_params, func_rest, func_captured) = match &function {
+                            Value::Closure(closure_data) => {
+                                (closure_data.body.clone(),
+                                 closure_data.params.clone(),
+                                 closure_data.rest_param.clone(),
+                                 closure_data.captured.clone())
+                            }
+                            Value::Function(name) => {
+                                let bytecode = self.functions.get(name.as_str())
+                                    .ok_or_else(|| RuntimeError::new(format!("Undefined function: {}", name)))?
+                                    .clone();
+                                (bytecode, vec!["x".to_string()], None, vec![])
+                            }
+                            _ => {
+                                return Err(RuntimeError::new(format!(
+                                    "Type error: pmap expects function or closure, got {}",
+                                    Self::type_name(&function)
+                                )));
+                            }
+                        };
+
+                        // Clone the full function table for parallel execution
+                        let functions = self.functions.clone();
+
+                        // Parallel map operation
+                        let results: Result<Vec<Value>, RuntimeError> = vec.par_iter()
+                            .map(|item| {
+                                // Create a mini-VM for this thread
+                                let mut thread_vm = VM::new();
+                                thread_vm.functions = functions.clone();
+
+                                // Execute the function with this item
+                                thread_vm.execute_closure_call(
+                                    &func_bytecode,
+                                    &func_params,
+                                    &func_rest,
+                                    &func_captured,
+                                    &[item.clone()]
+                                )
+                            })
+                            .collect();
+
+                        let result_vec = results?;
+                        self.value_stack.push(Value::List(List::from_vec(result_vec)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: pmap expects list, got {}",
+                            Self::type_name(&list)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::PFilter => {
+                use rayon::prelude::*;
+
+                let list = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PFilter".to_string()))?;
+                let predicate = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PFilter".to_string()))?;
+
+                match list {
+                    Value::List(items) => {
+                        let vec: Vec<Value> = items.iter().cloned().collect();
+
+                        let (func_bytecode, func_params, func_rest, func_captured) = match &predicate {
+                            Value::Closure(closure_data) => {
+                                (closure_data.body.clone(),
+                                 closure_data.params.clone(),
+                                 closure_data.rest_param.clone(),
+                                 closure_data.captured.clone())
+                            }
+                            Value::Function(name) => {
+                                let bytecode = self.functions.get(name.as_str())
+                                    .ok_or_else(|| RuntimeError::new(format!("Undefined function: {}", name)))?
+                                    .clone();
+                                (bytecode, vec!["x".to_string()], None, vec![])
+                            }
+                            _ => {
+                                return Err(RuntimeError::new(format!(
+                                    "Type error: pfilter expects function or closure, got {}",
+                                    Self::type_name(&predicate)
+                                )));
+                            }
+                        };
+
+                        let functions = self.functions.clone();
+
+                        // Parallel filter operation
+                        let results: Result<Vec<(Value, bool)>, RuntimeError> = vec.par_iter()
+                            .map(|item| {
+                                let mut thread_vm = VM::new();
+                                thread_vm.functions = functions.clone();
+
+                                let result = thread_vm.execute_closure_call(
+                                    &func_bytecode,
+                                    &func_params,
+                                    &func_rest,
+                                    &func_captured,
+                                    &[item.clone()]
+                                )?;
+
+                                Ok((item.clone(), matches!(result, Value::Boolean(true))))
+                            })
+                            .collect();
+
+                        let filtered: Vec<Value> = results?
+                            .into_iter()
+                            .filter_map(|(item, keep)| if keep { Some(item) } else { None })
+                            .collect();
+
+                        self.value_stack.push(Value::List(List::from_vec(filtered)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: pfilter expects list, got {}",
+                            Self::type_name(&list)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::PReduce => {
+                let function = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PReduce".to_string()))?;
+                let initial = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PReduce".to_string()))?;
+                let list = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in PReduce".to_string()))?;
+
+                match list {
+                    Value::List(items) => {
+                        let vec: Vec<Value> = items.iter().cloned().collect();
+
+                        // Handle empty list: just return the initial value
+                        if vec.is_empty() {
+                            self.value_stack.push(initial);
+                        } else {
+                            let (func_bytecode, func_params, func_rest, func_captured) = match &function {
+                                Value::Closure(closure_data) => {
+                                    (closure_data.body.clone(),
+                                     closure_data.params.clone(),
+                                     closure_data.rest_param.clone(),
+                                     closure_data.captured.clone())
+                                }
+                                Value::Function(name) => {
+                                    let bytecode = self.functions.get(name.as_str())
+                                        .ok_or_else(|| RuntimeError::new(format!("Undefined function: {}", name)))?
+                                        .clone();
+                                    (bytecode, vec!["acc".to_string(), "x".to_string()], None, vec![])
+                                }
+                                _ => {
+                                    return Err(RuntimeError::new(format!(
+                                        "Type error: preduce expects function or closure, got {}",
+                                        Self::type_name(&function)
+                                    )));
+                                }
+                            };
+
+                            let functions = self.functions.clone();
+
+                            // Simple sequential reduce after collecting items (can be optimized later)
+                            let mut accumulator = initial.clone();
+                            for item in vec.iter() {
+                                let mut thread_vm = VM::new();
+                                thread_vm.functions = functions.clone();
+
+                                accumulator = thread_vm.execute_closure_call(
+                                    &func_bytecode,
+                                    &func_params,
+                                    &func_rest,
+                                    &func_captured,
+                                    &[accumulator, item.clone()]
+                                )?;
+                            }
+
+                            self.value_stack.push(accumulator);
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: preduce expects list, got {}",
+                            Self::type_name(&list)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
         }
 
         Ok(())
@@ -2669,6 +2884,66 @@ impl VM {
             self.execute_one_instruction()?;
         }
         Ok(())
+    }
+
+    /// Execute a closure call in isolation (used for parallel operations)
+    /// Returns the result value
+    fn execute_closure_call(
+        &mut self,
+        bytecode: &[Instruction],
+        params: &[String],
+        rest_param: &Option<String>,
+        _captured: &[(String, Value)],  // TODO: Handle captured variables properly
+        args: &[Value]
+    ) -> Result<Value, RuntimeError> {
+        // Validate argument count
+        let required_args = params.len();
+        let has_rest = rest_param.is_some();
+
+        if has_rest {
+            if args.len() < required_args {
+                return Err(RuntimeError::new(format!(
+                    "Wrong number of arguments: expected at least {}, got {}",
+                    required_args, args.len()
+                )));
+            }
+        } else if args.len() != required_args {
+            return Err(RuntimeError::new(format!(
+                "Wrong number of arguments: expected {}, got {}",
+                required_args, args.len()
+            )));
+        }
+
+        // Set up execution environment
+        self.current_bytecode = bytecode.to_vec();
+        self.instruction_pointer = 0;
+        self.halted = false;
+
+        // Create a call frame with the arguments as locals
+        let frame = Frame {
+            return_address: 0,  // Not used for parallel calls
+            locals: args.to_vec(),
+            return_bytecode: Vec::new(),  // Not used for parallel calls
+            function_name: "<parallel>".to_string(),
+            captured: Vec::new(),  // TODO: Pass captured variables
+            stack_base: self.value_stack.len(),
+            loop_start: None,
+            loop_bindings_start: None,
+            loop_bindings_count: None,
+        };
+        self.call_stack.push(frame);
+
+        // Execute the bytecode
+        while !self.halted && self.instruction_pointer < self.current_bytecode.len() {
+            self.execute_one_instruction()?;
+        }
+
+        // Pop the call frame
+        self.call_stack.pop();
+
+        // Return the result (should be on top of stack)
+        self.value_stack.pop()
+            .ok_or_else(|| RuntimeError::new("No return value from closure call".to_string()))
     }
 
     pub fn get_stack_trace(&self) -> Vec<String> {

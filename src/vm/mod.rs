@@ -12,6 +12,6 @@ pub mod errors;
 pub mod object;
 
 // Re-export commonly used types for convenience
-pub use value::Value;
+pub use value::{Value, List};
 pub use instructions::Instruction;
 pub use vm::VM;

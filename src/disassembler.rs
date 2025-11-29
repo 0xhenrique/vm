@@ -186,6 +186,10 @@ fn format_instruction(instr: &Instruction) -> String {
         // Type inspection and symbol generation
         Instruction::TypeOf => "TypeOf".to_string(),
         Instruction::GenSym => "GenSym".to_string(),
+        // Parallel Collections
+        Instruction::PMap => "PMap".to_string(),
+        Instruction::PFilter => "PFilter".to_string(),
+        Instruction::PReduce => "PReduce".to_string(),
     }
 }
 

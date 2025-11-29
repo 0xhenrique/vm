@@ -160,6 +160,84 @@
 (defun not (x)
   (if x false true))
 
+;; partition: Split list into two lists based on predicate
+;; Returns (truthy-items falsy-items)
+(defun partition (pred lst)
+  (let ((trues (filter pred lst))
+        (falses (filter (lambda (x) (not (pred x))) lst)))
+    (list trues falses)))
+
+;; interleave: Interleave two lists
+(defun interleave (lst1 lst2)
+  (if (null? lst1)
+      lst2
+      (if (null? lst2)
+          lst1
+          (cons (car lst1)
+                (cons (car lst2)
+                      (interleave (cdr lst1) (cdr lst2)))))))
+
+;; interpose: Insert separator between list elements
+(defun interpose (sep lst)
+  (if (null? lst)
+      '()
+      (if (null? (cdr lst))
+          lst
+          (cons (car lst)
+                (cons sep (interpose sep (cdr lst)))))))
+
+;; frequencies: Count occurrences of each element (returns assoc list)
+;; Helper function for frequencies
+(defun frequencies-helper (lst acc)
+  (if (null? lst)
+      acc
+      (let ((item (car lst))
+            (rest (cdr lst)))
+        (let ((entry (filter (lambda (pair) (== (car pair) item)) acc)))
+          (if (null? entry)
+              (frequencies-helper rest (cons (list item 1) acc))
+              (let ((count (car (cdr (car entry))))
+                    (others (filter (lambda (pair) (!= (car pair) item)) acc)))
+                (frequencies-helper rest (cons (list item (+ count 1)) others))))))))
+
+(defun frequencies (lst)
+  (frequencies-helper lst '()))
+
+;; group-by: Group list elements by function result (returns assoc list)
+(defun group-by-helper (f lst acc)
+  (if (null? lst)
+      acc
+      (let ((item (car lst))
+            (key (f item))
+            (rest (cdr lst)))
+        (let ((entry (filter (lambda (pair) (== (car pair) key)) acc)))
+          (if (null? entry)
+              (group-by-helper f rest (cons (list key (list item)) acc))
+              (let ((items (car (cdr (car entry))))
+                    (others (filter (lambda (pair) (!= (car pair) key)) acc)))
+                (group-by-helper f rest (cons (list key (append items (list item))) others))))))))
+
+(defun group-by (f lst)
+  (group-by-helper f lst '()))
+
+;; sort: Sort a list using comparison function
+;; Uses a simple insertion sort
+(defun insert-sorted (cmp item lst)
+  (if (null? lst)
+      (list item)
+      (if (cmp item (car lst))
+          (cons item lst)
+          (cons (car lst) (insert-sorted cmp item (cdr lst))))))
+
+(defun sort (cmp lst)
+  (if (null? lst)
+      '()
+      (insert-sorted cmp (car lst) (sort cmp (cdr lst)))))
+
+;; sort-by: Sort a list by applying function to elements
+(defun sort-by (f cmp lst)
+  (sort (lambda (a b) (cmp (f a) (f b))) lst))
+
 ;; ------------------------------------------------------------
 ;; String Utilities
 ;; ------------------------------------------------------------
@@ -295,3 +373,32 @@
 
 ;; Helper: is-err (alias for err?)
 (defun is-err (r) (err? r))
+
+;; ------------------------------------------------------------
+;; Debugging and Profiling Macros
+;; ------------------------------------------------------------
+
+;; time: Profile code execution time
+;; Usage: (time expr) - evaluates expr, prints elapsed time, returns result
+;; Note: Uses simple approach without gensym for now
+(defmacro time (expr)
+  (list 'let (list (list '__t_start__ (list 'current-timestamp)))
+    (list 'let (list (list '__t_result__ expr))
+      (list 'let (list (list '__t_end__ (list 'current-timestamp)))
+        (list 'let (list (list '__t_elapsed__ (list '- '__t_end__ '__t_start__)))
+          (list 'do
+            (list 'print (list 'string-append
+                              (list 'string-append "Elapsed time: "
+                                    (list 'number->string '__t_elapsed__))
+                              " seconds"))
+            '__t_result__))))))
+
+;; assert: Runtime assertion for testing and debugging
+;; Usage: (assert condition)
+;; Note: Simplified version - macros don't support variadic parameters
+(defmacro assert (condition)
+  `(if (not ,condition)
+       (do
+         (print "Assertion failed")
+         (err "Assertion failed"))
+       true))

@@ -3203,7 +3203,7 @@ impl Compiler {
             // Comparison
             "<=" | "<" | ">" | ">=" | "==" | "!=" |
             // List operations
-            "cons" | "car" | "cdr" | "list?" | "append" | "list-ref" | "list-length" | "null?" |
+            "cons" | "car" | "cdr" | "list?" | "append" | "list-ref" | "list-length" | "null?" | "list" |
             // Type predicates
             "integer?" | "boolean?" | "function?" | "closure?" | "procedure?" | "number?" |
             // String operations
@@ -3214,10 +3214,10 @@ impl Compiler {
             "read-file" | "write-file" | "file-exists?" | "write-binary-file" | "load" | "require" |
             // HashMap operations
             "hashmap?" | "hashmap-get" | "hashmap-set" | "hashmap-keys" |
-            "hashmap-values" | "hashmap-contains-key?" |
+            "hashmap-values" | "hashmap-contains-key?" | "hash-map" |
             // Vector operations
             "vector?" | "vector-ref" | "vector-set" | "vector-push" | "vector-pop" |
-            "vector-length" |
+            "vector-length" | "vector" |
             // Type conversions
             "list->vector" | "vector->list" |
             // Metaprogramming & Reflection

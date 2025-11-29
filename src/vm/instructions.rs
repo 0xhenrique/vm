@@ -135,4 +135,8 @@ pub enum Instruction {
     TypeOf,              // Pop value, push symbol representing its type
     // Symbol generation
     GenSym,              // Push a unique symbol
+    // Parallel Collections (Phase 12a)
+    PMap,                // Pop list and function, parallel map, push result list
+    PFilter,             // Pop list and predicate, parallel filter, push result list
+    PReduce,             // Pop list, initial value, and binary function, parallel reduce, push result
 }
