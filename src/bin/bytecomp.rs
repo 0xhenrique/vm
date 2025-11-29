@@ -73,7 +73,15 @@ fn main() {
     let (mut functions, mut main_bytecode) = match compiler.compile_program(&exprs) {
         Ok((f, m)) => (f, m),
         Err(compile_error) => {
-            eprintln!("{}", compile_error.format(Some(&source)));
+            // Extract source line for context
+            let source_lines: Vec<&str> = source.lines().collect();
+            let source_line = if compile_error.location.line > 0 && compile_error.location.line <= source_lines.len() {
+                Some(source_lines[compile_error.location.line - 1])
+            } else {
+                None
+            };
+
+            eprintln!("{}", compile_error.format(source_line));
             std::process::exit(1);
         }
     };

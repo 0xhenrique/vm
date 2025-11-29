@@ -7,8 +7,6 @@ use crate::vm::vm::VM;
 use crate::vm::stack::Frame;
 use super::ast::{LispExpr, SourceExpr};
 
-// ==================== HELPER TYPES ====================
-
 #[derive(Clone)]
 enum ValueLocation {
     Arg(usize),                                    // Direct argument
@@ -126,12 +124,10 @@ impl Compiler {
                 } else {
                     // Check local bindings first (let bindings)
                     if let Some(location) = self.local_bindings.get(s) {
-                        let loc = location.clone();
-                        loc.emit_load(self);
+                        location.clone().emit_load(self);
                     } else if let Some(location) = self.pattern_bindings.get(s) {
                         // Check pattern bindings (for nested pattern matches)
-                        let loc = location.clone();
-                        loc.emit_load(self);
+                        location.clone().emit_load(self);
                     } else if let Some(idx) = self.param_names.iter().position(|p| p == s) {
                         // Check if this symbol is a parameter
                         self.emit(Instruction::LoadArg(idx));
@@ -1050,9 +1046,6 @@ impl Compiler {
             ));
         }
 
-// ==================== COMPILER CORE ====================
-
-
         // Extract variable name
         let var_name = match &items[1].expr {
             LispExpr::Symbol(s) => s.clone(),
@@ -1146,9 +1139,6 @@ impl Compiler {
             let clauses: Vec<&SourceExpr> = items[2..].iter().collect();
             self.compile_multi_clause_defun(&fn_name, &clauses, &items[1].location)
         }
-
-// ==================== PATTERN MATCHING ====================
-
     }
 
     // Compile old-style single-clause defun
@@ -1528,9 +1518,6 @@ impl Compiler {
                     self.bytecode[jmp_idx] = Instruction::JmpIfFalse(next_clause_addr);
                 }
             }
-
-// ==================== SPECIAL FORMS (LET, COND, AND, OR) ====================
-
         }
 
         Ok(())
@@ -1612,9 +1599,6 @@ impl Compiler {
 
         // Restore binding context
         self.local_bindings = saved_bindings;
-
-// ==================== MACRO SYSTEM ====================
-
         self.stack_depth = saved_stack_depth;
 
         Ok(())
@@ -1841,9 +1825,6 @@ impl Compiler {
                     pattern.location.clone(),
                 ));
             }
-
-// ==================== FUNCTION/LAMBDA COMPILATION ====================
-
         }
 
         Ok(())
@@ -2208,11 +2189,9 @@ impl Compiler {
     fn compile_variable_load(&mut self, var_name: &str) -> Result<(), CompileError> {
         // Check local bindings first
         if let Some(location) = self.local_bindings.get(var_name) {
-            let loc = location.clone();
-                        loc.emit_load(self);
+            location.clone().emit_load(self);
         } else if let Some(location) = self.pattern_bindings.get(var_name) {
-            let loc = location.clone();
-                        loc.emit_load(self);
+            location.clone().emit_load(self);
         } else if let Some(idx) = self.param_names.iter().position(|p| p == var_name) {
             self.emit(Instruction::LoadArg(idx));
         } else {
@@ -2235,9 +2214,6 @@ impl Compiler {
                 self.local_bindings.insert(s.clone(), location);
             }
             LispExpr::Symbol(s) if s == "_" => {
-
-// ==================== QUASIQUOTE COMPILATION ====================
-
                 // Wildcard, no binding
             }
             // Could recursively handle nested patterns here

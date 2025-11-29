@@ -1,8 +1,9 @@
 // Compiler subsystem module
+// This module contains all the compilation components
 
 pub mod ast;
-mod codegen;
+pub mod codegen;
 
-// Re-export
+// Re-export commonly used types for convenience
 pub use ast::{LispExpr, SourceExpr};
 pub use codegen::Compiler;

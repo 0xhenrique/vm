@@ -36,7 +36,7 @@
     (if (boolean? expr)
       (compile-literal expr env)
       (if (symbol? expr)
-        (cons env (list (list 'error "no variables supported")))
+        (cons env (list (list 'error "Variables not yet supported")))
         (if (list? expr)
           (if (== expr '())
             (cons env (list (list 'error "Empty list")))
