@@ -216,6 +216,9 @@ impl Repl {
                     .collect();
                 format!("[{}]", formatted_items.join(" "))
             }
+            Value::TcpListener(_) => "<tcp-listener>".to_string(),
+            Value::TcpStream(_) => "<tcp-stream>".to_string(),
+            Value::SharedTcpListener(_) => "<shared-tcp-listener>".to_string(),
         }
     }
 

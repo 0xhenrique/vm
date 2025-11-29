@@ -1,6 +1,9 @@
 use super::instructions::Instruction;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::net::{TcpListener, TcpStream};
 
 /// Cons-cell based list structure for O(1) cons/car/cdr operations.
 /// Uses Arc for structural sharing - cdr returns a reference to existing tail.
@@ -202,6 +205,9 @@ pub enum Value {
     Closure(Arc<ClosureData>),
     HashMap(Arc<HashMap<String, Value>>), // Hash map with string keys
     Vector(Arc<Vec<Value>>), // Efficient array with O(1) indexed access
+    TcpListener(Rc<RefCell<TcpListener>>), // TCP listener for HTTP server
+    TcpStream(Rc<RefCell<TcpStream>>), // TCP stream for HTTP connections
+    SharedTcpListener(Arc<std::net::TcpListener>), // Thread-safe TCP listener for parallel serving
 }
 
 // Custom PartialEq to handle NaN in floats

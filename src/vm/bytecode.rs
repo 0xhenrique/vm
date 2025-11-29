@@ -337,6 +337,12 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::StringJoin => bytes.push(106),
         Instruction::StringTrim => bytes.push(107),
         Instruction::StringReplace => bytes.push(108),
+        // String predicates and utilities (126-130)
+        Instruction::StringStartsWith => bytes.push(126),
+        Instruction::StringEndsWith => bytes.push(127),
+        Instruction::StringContains => bytes.push(128),
+        Instruction::StringUpcase => bytes.push(129),
+        Instruction::StringDowncase => bytes.push(130),
         // Date/Time operations (109-110)
         Instruction::CurrentTimestamp => bytes.push(109),
         Instruction::FormatTimestamp => bytes.push(110),
@@ -354,6 +360,12 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::PMap => bytes.push(116),
         Instruction::PFilter => bytes.push(117),
         Instruction::PReduce => bytes.push(118),
+        // HTTP/Networking (119-123)
+        Instruction::HttpListen => bytes.push(119),
+        Instruction::HttpAccept => bytes.push(120),
+        Instruction::HttpReadRequest => bytes.push(121),
+        Instruction::HttpSendResponse => bytes.push(122),
+        Instruction::HttpClose => bytes.push(123),
         // Loop/recur instructions (111-113)
         Instruction::SetLocal(pos) => {
             bytes.push(111);
@@ -367,6 +379,9 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             bytes.push(113);
             write_u32(bytes, *count as u32);
         }
+        // Multi-threaded HTTP (124-125)
+        Instruction::HttpListenShared => bytes.push(124),
+        Instruction::HttpServeParallel => bytes.push(125),
     }
 }
 
@@ -550,10 +565,25 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         116 => Ok(Instruction::PMap),
         117 => Ok(Instruction::PFilter),
         118 => Ok(Instruction::PReduce),
+        // HTTP/Networking (119-123)
+        119 => Ok(Instruction::HttpListen),
+        120 => Ok(Instruction::HttpAccept),
+        121 => Ok(Instruction::HttpReadRequest),
+        122 => Ok(Instruction::HttpSendResponse),
+        123 => Ok(Instruction::HttpClose),
         // Loop/recur instructions (111-113)
         111 => Ok(Instruction::SetLocal(read_u32(bytes, pos)? as usize)),
         112 => Ok(Instruction::BeginLoop(read_u32(bytes, pos)? as usize)),
         113 => Ok(Instruction::Recur(read_u32(bytes, pos)? as usize)),
+        // Multi-threaded HTTP (124-125)
+        124 => Ok(Instruction::HttpListenShared),
+        125 => Ok(Instruction::HttpServeParallel),
+        // String predicates and utilities (126-130)
+        126 => Ok(Instruction::StringStartsWith),
+        127 => Ok(Instruction::StringEndsWith),
+        128 => Ok(Instruction::StringContains),
+        129 => Ok(Instruction::StringUpcase),
+        130 => Ok(Instruction::StringDowncase),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -636,6 +666,15 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             for value in vec.iter() {
                 write_value(bytes, value);
             }
+        }
+        Value::TcpListener(_) => {
+            panic!("Cannot serialize TcpListener to bytecode - runtime value only");
+        }
+        Value::TcpStream(_) => {
+            panic!("Cannot serialize TcpStream to bytecode - runtime value only");
+        }
+        Value::SharedTcpListener(_) => {
+            panic!("Cannot serialize SharedTcpListener to bytecode - runtime value only");
         }
     }
 }

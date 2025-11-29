@@ -52,6 +52,9 @@ fn format_value(value: &Value) -> String {
             let formatted_items: Vec<String> = items.iter().map(|v| format_value(v)).collect();
             format!("[{}]", formatted_items.join(" "))
         }
+        Value::TcpListener(_) => "#<tcp-listener>".to_string(),
+        Value::TcpStream(_) => "#<tcp-stream>".to_string(),
+        Value::SharedTcpListener(_) => "#<shared-tcp-listener>".to_string(),
     }
 }
 

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use super::value::{Value, List, ClosureData};
 use super::instructions::Instruction;
@@ -95,6 +97,12 @@ impl VM {
         self.functions.insert("string-join".to_string(), vec![LoadArg(0), LoadArg(1), StringJoin, Ret]);
         self.functions.insert("string-trim".to_string(), vec![LoadArg(0), StringTrim, Ret]);
         self.functions.insert("string-replace".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), StringReplace, Ret]);
+        // String predicates and utilities
+        self.functions.insert("string-starts-with?".to_string(), vec![LoadArg(0), LoadArg(1), StringStartsWith, Ret]);
+        self.functions.insert("string-ends-with?".to_string(), vec![LoadArg(0), LoadArg(1), StringEndsWith, Ret]);
+        self.functions.insert("string-contains?".to_string(), vec![LoadArg(0), LoadArg(1), StringContains, Ret]);
+        self.functions.insert("string-upcase".to_string(), vec![LoadArg(0), StringUpcase, Ret]);
+        self.functions.insert("string-downcase".to_string(), vec![LoadArg(0), StringDowncase, Ret]);
 
         // File I/O operations
         self.functions.insert("read-file".to_string(), vec![LoadArg(0), ReadFile, Ret]);
@@ -171,19 +179,32 @@ impl VM {
         self.functions.insert("pmap".to_string(), vec![LoadArg(0), LoadArg(1), PMap, Ret]);
         self.functions.insert("pfilter".to_string(), vec![LoadArg(0), LoadArg(1), PFilter, Ret]);
         self.functions.insert("preduce".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), PReduce, Ret]);
+
+        // HTTP/Networking (Phase 14)
+        self.functions.insert("http-listen".to_string(), vec![LoadArg(0), HttpListen, Ret]);
+        self.functions.insert("http-accept".to_string(), vec![LoadArg(0), HttpAccept, Ret]);
+        self.functions.insert("http-read-request".to_string(), vec![LoadArg(0), HttpReadRequest, Ret]);
+        self.functions.insert("http-send-response".to_string(), vec![LoadArg(0), LoadArg(1), HttpSendResponse, Ret]);
+        self.functions.insert("http-close".to_string(), vec![LoadArg(0), HttpClose, Ret]);
+
+        // Multi-threaded HTTP (Phase 14b)
+        self.functions.insert("http-listen-shared".to_string(), vec![LoadArg(0), HttpListenShared, Ret]);
+        self.functions.insert("http-serve-parallel".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), LoadArg(3), HttpServeParallel, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
-        if self.instruction_pointer >= self.current_bytecode.len() {
+        let ip = self.instruction_pointer;
+        if ip >= self.current_bytecode.len() {
             self.halted = true;
             return Ok(());
         }
 
-        let instruction = self.current_bytecode[self.instruction_pointer].clone();
-
-        match instruction {
+        // Match on reference to avoid cloning every instruction.
+        // For instructions with payloads, clone only the data we need.
+        match &self.current_bytecode[ip] {
             Instruction::Push(value) => {
-                self.value_stack.push(value);
+                let v = value.clone();
+                self.value_stack.push(v);
                 self.instruction_pointer += 1;
             }
             Instruction::Add => {
@@ -491,9 +512,10 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::Jmp(addr) => {
-                self.instruction_pointer = addr;
+                self.instruction_pointer = *addr;
             }
             Instruction::JmpIfFalse(addr) => {
+                let addr = *addr;
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in JmpIfFalse operation".to_string()))?;
                 match value {
                     Value::Boolean(false) => {
@@ -511,12 +533,14 @@ impl VM {
                 }
             }
             Instruction::LoadArg(idx) => {
+                let idx = *idx;
                 let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame to load arg from".to_string()))?;
                 let value = frame.locals.get(idx).ok_or_else(|| RuntimeError::new(format!("Arg index {} out of bounds", idx)))?.clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
             Instruction::GetLocal(pos) => {
+                let pos = *pos;
                 // Load from value stack at position relative to current frame's stack base
                 let stack_base = if let Some(frame) = self.call_stack.last() {
                     frame.stack_base
@@ -534,6 +558,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::SetLocal(pos) => {
+                let pos = *pos;
                 // Set local variable at position on value stack
                 let stack_base = if let Some(frame) = self.call_stack.last() {
                     frame.stack_base
@@ -554,6 +579,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::BeginLoop(bindings_count) => {
+                let bindings_count = *bindings_count;
                 // Mark the current position as a loop start
                 // The loop bindings are already on the value stack (pushed by the compiler)
                 // We just need to record where they are and where to jump back to
@@ -589,6 +615,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::Recur(arg_count) => {
+                let arg_count = *arg_count;
                 // Get loop information from current frame
                 let (loop_start, bindings_start, bindings_count) = if let Some(frame) = self.call_stack.last() {
                     (
@@ -615,6 +642,10 @@ impl VM {
                 }
                 new_values.reverse();
 
+                // Clean up stack: truncate everything after the loop bindings
+                // This removes all let-bindings created inside the loop body
+                self.value_stack.truncate(bindings_start + bindings_count);
+
                 // Update the loop bindings with new values
                 for (i, value) in new_values.into_iter().enumerate() {
                     self.value_stack[bindings_start + i] = value;
@@ -624,6 +655,7 @@ impl VM {
                 self.instruction_pointer = loop_start;
             }
             Instruction::PopN(n) => {
+                let n = *n;
                 // Pop N values from the stack
                 for _ in 0..n {
                     self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during PopN".to_string()))?;
@@ -631,6 +663,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::Slide(n) => {
+                let n = *n;
                 // Pop the top value (result), pop N values (bindings), push result back
                 let result = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during Slide".to_string()))?;
                 for _ in 0..n {
@@ -640,6 +673,8 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::CheckArity(expected_arity, jump_addr) => {
+                let expected_arity = *expected_arity;
+                let jump_addr = *jump_addr;
                 // Check if current frame has the expected number of arguments
                 let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame for arity check".to_string()))?;
                 if frame.locals.len() != expected_arity {
@@ -651,6 +686,7 @@ impl VM {
                 }
             }
             Instruction::PackRestArgs(required_count) => {
+                let required_count = *required_count;
                 // Collect args from required_count onwards into a list
                 // Replace them with a single list in frame.locals
                 let frame = self.call_stack.last_mut().ok_or_else(|| RuntimeError::new("No frame for PackRestArgs".to_string()))?;
@@ -671,6 +707,9 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::MakeClosure(params, body, num_captured) => {
+                let params = params.clone();
+                let body = body.clone();
+                let num_captured = *num_captured;
                 // Pop captured values from stack (compiler pushed them in order)
                 let mut captured_values = Vec::new();
                 for _ in 0..num_captured {
@@ -688,9 +727,9 @@ impl VM {
                     .collect();
 
                 let closure = Value::Closure(Arc::new(ClosureData {
-                    params: params.clone(),
+                    params,
                     rest_param: None, // Regular closure, no variadic support
-                    body: body.clone(),
+                    body,
                     captured,
                 }));
 
@@ -698,6 +737,10 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::MakeVariadicClosure(required_params, rest_param, body, num_captured) => {
+                let required_params = required_params.clone();
+                let rest_param = rest_param.clone();
+                let body = body.clone();
+                let num_captured = *num_captured;
                 // Pop captured values from stack (compiler pushed them in order)
                 let mut captured_values = Vec::new();
                 for _ in 0..num_captured {
@@ -713,9 +756,9 @@ impl VM {
                     .collect();
 
                 let closure = Value::Closure(Arc::new(ClosureData {
-                    params: required_params.clone(),
-                    rest_param: Some(rest_param.clone()), // Variadic closure
-                    body: body.clone(),
+                    params: required_params,
+                    rest_param: Some(rest_param), // Variadic closure
+                    body,
                     captured,
                 }));
 
@@ -723,6 +766,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::CallClosure(arg_count) => {
+                let arg_count = *arg_count;
                 // Pop arguments from stack (in reverse order)
                 let mut args = Vec::new();
                 for _ in 0..arg_count {
@@ -912,6 +956,7 @@ impl VM {
                 }
             }
             Instruction::LoadCaptured(idx) => {
+                let idx = *idx;
                 // Load a captured variable from the current closure's environment
                 let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame for LoadCaptured".to_string()))?;
                 let value = frame.captured.get(idx)
@@ -933,6 +978,8 @@ impl VM {
                 self.instruction_pointer = frame.return_address;
             }
             Instruction::Call(fn_name, arg_count) => {
+                let fn_name = fn_name.clone();
+                let arg_count = *arg_count;
                 let fn_bytecode = self.functions.get(&fn_name)
                     .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                     .clone();
@@ -949,7 +996,7 @@ impl VM {
                     return_address: self.instruction_pointer + 1,
                     locals: args,
                     return_bytecode: self.current_bytecode.clone(),
-                    function_name: fn_name.clone(),
+                    function_name: fn_name,
                     captured: Vec::new(), // Regular functions don't have captured variables
                     stack_base: self.value_stack.len(), // Current stack top is base for this function
                     loop_start: None,
@@ -963,6 +1010,8 @@ impl VM {
                 self.instruction_pointer = 0;
             }
             Instruction::TailCall(fn_name, arg_count) => {
+                let fn_name = fn_name.clone();
+                let arg_count = *arg_count;
                 let fn_bytecode = self.functions.get(&fn_name)
                     .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                     .clone();
@@ -984,7 +1033,7 @@ impl VM {
                     // Replace the locals (arguments) in the current frame
                     frame.locals = args;
                     // Update function name for stack traces
-                    frame.function_name = fn_name.clone();
+                    frame.function_name = fn_name;
                     // Keep the same return address, return bytecode, and stack_base
                 } else {
                     // No frame exists (top-level call), treat as regular call
@@ -992,7 +1041,7 @@ impl VM {
                         return_address: self.instruction_pointer + 1,
                         locals: args,
                         return_bytecode: self.current_bytecode.clone(),
-                        function_name: fn_name.clone(),
+                        function_name: fn_name,
                         captured: Vec::new(),
                         stack_base: self.value_stack.len(), // Current stack top is base for this function
                         loop_start: None,
@@ -1175,6 +1224,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::MakeList(n) => {
+                let n = *n;
                 // Pop n values and create a list
                 let mut items = Vec::new();
                 for _ in 0..n {
@@ -1283,6 +1333,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::LoadGlobal(name) => {
+                let name = name.clone();
                 let value = self.global_vars.get(&name)
                     .ok_or_else(|| RuntimeError::new(format!("Undefined global variable '{}'", name)))?
                     .clone();
@@ -1290,6 +1341,7 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::StoreGlobal(name) => {
+                let name = name.clone();
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StoreGlobal".to_string()))?;
                 self.global_vars.insert(name, value);
                 self.instruction_pointer += 1;
@@ -1507,6 +1559,87 @@ impl VM {
                             Self::type_name(&string),
                             Self::type_name(&old_str),
                             Self::type_name(&new_str)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringStartsWith => {
+                let prefix = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringStartsWith".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringStartsWith".to_string()))?;
+                match (&string, &prefix) {
+                    (Value::String(s), Value::String(p)) => {
+                        self.value_stack.push(Value::Boolean(s.starts_with(p.as_str())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-starts-with?' expects two strings, got {} and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&prefix)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringEndsWith => {
+                let suffix = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringEndsWith".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringEndsWith".to_string()))?;
+                match (&string, &suffix) {
+                    (Value::String(s), Value::String(p)) => {
+                        self.value_stack.push(Value::Boolean(s.ends_with(p.as_str())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-ends-with?' expects two strings, got {} and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&suffix)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringContains => {
+                let needle = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringContains".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringContains".to_string()))?;
+                match (&string, &needle) {
+                    (Value::String(s), Value::String(n)) => {
+                        self.value_stack.push(Value::Boolean(s.contains(n.as_str())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-contains?' expects two strings, got {} and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&needle)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringUpcase => {
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringUpcase".to_string()))?;
+                match string {
+                    Value::String(s) => {
+                        self.value_stack.push(Value::String(Arc::new(s.to_uppercase())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-upcase' expects a string, got {}",
+                            Self::type_name(&string)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringDowncase => {
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringDowncase".to_string()))?;
+                match string {
+                    Value::String(s) => {
+                        self.value_stack.push(Value::String(Arc::new(s.to_lowercase())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-downcase' expects a string, got {}",
+                            Self::type_name(&string)
                         )));
                     }
                 }
@@ -1750,6 +1883,7 @@ impl VM {
             }
             // HashMap operations
             Instruction::MakeHashMap(n) => {
+                let n = *n;
                 // Pop n key-value pairs and create a hashmap
                 let mut pairs = Vec::new();
                 for _ in 0..n {
@@ -1888,6 +2022,7 @@ impl VM {
             }
             // Vector operations
             Instruction::MakeVector(n) => {
+                let n = *n;
                 // Pop n values and create a vector
                 let mut items = Vec::new();
                 for _ in 0..n {
@@ -2594,6 +2729,9 @@ impl VM {
                     Value::Closure(_) => "closure",
                     Value::HashMap(_) => "hashmap",
                     Value::Vector(_) => "vector",
+                    Value::TcpListener(_) => "tcp-listener",
+                    Value::TcpStream(_) => "tcp-stream",
+                    Value::SharedTcpListener(_) => "shared-tcp-listener",
                 };
                 self.value_stack.push(Value::Symbol(Arc::new(type_symbol.to_string())));
                 self.instruction_pointer += 1;
@@ -2647,11 +2785,11 @@ impl VM {
                             }
                         };
 
-                        // Clone the full function table for parallel execution
+                        // Clone the full function table for execution
                         let functions = self.functions.clone();
 
-                        // Parallel map operation
-                        let results: Result<Vec<Value>, RuntimeError> = vec.par_iter()
+                        // Map operation (sequential due to Rc not being Send)
+                        let results: Result<Vec<Value>, RuntimeError> = vec.iter()
                             .map(|item| {
                                 // Create a mini-VM for this thread
                                 let mut thread_vm = VM::new();
@@ -2716,8 +2854,8 @@ impl VM {
 
                         let functions = self.functions.clone();
 
-                        // Parallel filter operation
-                        let results: Result<Vec<(Value, bool)>, RuntimeError> = vec.par_iter()
+                        // Filter operation (sequential due to Rc not being Send)
+                        let results: Result<Vec<(Value, bool)>, RuntimeError> = vec.iter()
                             .map(|item| {
                                 let mut thread_vm = VM::new();
                                 thread_vm.functions = functions.clone();
@@ -2817,6 +2955,587 @@ impl VM {
                 }
                 self.instruction_pointer += 1;
             }
+            Instruction::HttpListen => {
+                let port = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpListen".to_string()))?;
+
+                match port {
+                    Value::Integer(port_num) => {
+                        if port_num < 1 || port_num > 65535 {
+                            return Err(RuntimeError::new(format!(
+                                "http-listen: invalid port number {}, must be 1-65535",
+                                port_num
+                            )));
+                        }
+
+                        let addr = format!("0.0.0.0:{}", port_num);
+                        match std::net::TcpListener::bind(&addr) {
+                            Ok(listener) => {
+                                self.value_stack.push(Value::TcpListener(Rc::new(RefCell::new(listener))));
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::new(format!(
+                                    "http-listen: failed to bind to port {}: {}",
+                                    port_num, e
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-listen expects integer port, got {}",
+                            Self::type_name(&port)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpAccept => {
+                let listener_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpAccept".to_string()))?;
+
+                match listener_val {
+                    Value::TcpListener(listener_rc) => {
+                        let mut listener = listener_rc.borrow_mut();
+
+                        match listener.accept() {
+                            Ok((stream, _addr)) => {
+                                self.value_stack.push(Value::TcpStream(Rc::new(RefCell::new(stream))));
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::new(format!(
+                                    "http-accept: failed to accept connection: {}",
+                                    e
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-accept expects TcpListener, got {}",
+                            Self::type_name(&listener_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpReadRequest => {
+                use std::io::{Read, BufRead, BufReader};
+
+                let stream_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpReadRequest".to_string()))?;
+
+                match stream_val {
+                    Value::TcpStream(stream_rc) => {
+                        let stream = stream_rc.borrow();
+
+                        // Use BufReader for efficient buffered reading
+                        let mut reader = BufReader::with_capacity(8192, &*stream);
+
+                        // Read request line - reuse buffer across header reads
+                        let mut line_buf = Vec::with_capacity(256);
+                        reader.read_until(b'\n', &mut line_buf)
+                            .map_err(|e| RuntimeError::new(format!("http-read-request: read error: {}", e)))?;
+
+                        // Return nil if connection was closed (empty read) - important for keep-alive
+                        if line_buf.is_empty() {
+                            self.value_stack.push(Value::List(List::Nil));
+                        } else {
+
+                        let request_line = String::from_utf8_lossy(&line_buf).trim().to_string();
+
+                        // Parse request line: "METHOD /path HTTP/1.1"
+                        let parts: Vec<&str> = request_line.split_whitespace().collect();
+                        if parts.len() < 2 {
+                            return Err(RuntimeError::new("http-read-request: invalid request line".to_string()));
+                        }
+
+                        let method = parts[0].to_string();
+                        let path = parts[1].to_string();
+
+                        // Read headers - reuse line buffer
+                        let mut headers = HashMap::new();
+                        let mut content_length = 0;
+
+                        loop {
+                            line_buf.clear();
+                            reader.read_until(b'\n', &mut line_buf)
+                                .map_err(|e| RuntimeError::new(format!("http-read-request: header read error: {}", e)))?;
+
+                            let line = String::from_utf8_lossy(&line_buf).trim().to_string();
+                            if line.is_empty() {
+                                break; // End of headers
+                            }
+
+                            if let Some(colon_pos) = line.find(':') {
+                                let key = line[..colon_pos].trim().to_lowercase();
+                                let value = line[colon_pos + 1..].trim().to_string();
+
+                                if key == "content-length" {
+                                    content_length = value.parse().unwrap_or(0);
+                                }
+
+                                headers.insert(key, Value::String(Arc::new(value)));
+                            }
+                        }
+
+                        // Read body if present - use from_utf8 for zero-copy when valid
+                        let body = if content_length > 0 {
+                            let mut body_buf = vec![0u8; content_length];
+                            reader.read_exact(&mut body_buf)
+                                .map_err(|e| RuntimeError::new(format!("http-read-request: failed to read body: {}", e)))?;
+                            match String::from_utf8(body_buf) {
+                                Ok(s) => s,
+                                Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+                            }
+                        } else {
+                            String::new()
+                        };
+
+                        // Build response hashmap with pre-allocated capacity
+                        let mut request_map = HashMap::with_capacity(4);
+                        request_map.insert("method".to_string(), Value::String(Arc::new(method)));
+                        request_map.insert("path".to_string(), Value::String(Arc::new(path)));
+                        request_map.insert("body".to_string(), Value::String(Arc::new(body)));
+                        request_map.insert("headers".to_string(), Value::HashMap(Arc::new(headers)));
+
+                        self.value_stack.push(Value::HashMap(Arc::new(request_map)));
+                        } // close the else block for non-empty request
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-read-request expects TcpStream, got {}",
+                            Self::type_name(&stream_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpSendResponse => {
+                use std::io::Write;
+
+                let response_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpSendResponse".to_string()))?;
+                let stream_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpSendResponse".to_string()))?;
+
+                match (stream_val, response_val) {
+                    (Value::TcpStream(stream_rc), Value::HashMap(response_map)) => {
+                        let mut stream = stream_rc.borrow_mut();
+
+                        // Extract status code (default 200)
+                        let status = match response_map.get("status") {
+                            Some(Value::Integer(code)) => *code,
+                            _ => 200,
+                        };
+
+                        // Extract body (default empty string)
+                        let body = match response_map.get("body") {
+                            Some(Value::String(s)) => s.as_str(),
+                            _ => "",
+                        };
+
+                        // Extract keep-alive flag (default false for backward compatibility)
+                        let keep_alive = match response_map.get("keep-alive") {
+                            Some(Value::Boolean(b)) => *b,
+                            _ => false,
+                        };
+
+                        // Build HTTP response
+                        let status_text = match status {
+                            200 => "OK",
+                            201 => "Created",
+                            204 => "No Content",
+                            400 => "Bad Request",
+                            404 => "Not Found",
+                            500 => "Internal Server Error",
+                            _ => "Unknown",
+                        };
+
+                        // Include Connection header based on keep-alive flag
+                        let connection_header = if keep_alive {
+                            "Connection: keep-alive\r\n"
+                        } else {
+                            "Connection: close\r\n"
+                        };
+
+                        let response = format!(
+                            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n{}Content-Type: text/plain\r\n\r\n{}",
+                            status, status_text, body.len(), connection_header, body
+                        );
+
+                        match stream.write_all(response.as_bytes()) {
+                            Ok(_) => {
+                                stream.flush().ok(); // Ignore flush errors
+                                self.value_stack.push(Value::Boolean(true));
+                            }
+                            Err(_e) => {
+                                self.value_stack.push(Value::Boolean(false));
+                            }
+                        }
+                    }
+                    (stream_val, response_val) => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-send-response expects TcpStream and HashMap, got {} and {}",
+                            Self::type_name(&stream_val),
+                            Self::type_name(&response_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpClose => {
+                let stream_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpClose".to_string()))?;
+
+                match stream_val {
+                    Value::TcpStream(stream_rc) => {
+                        let stream = stream_rc.borrow();
+
+                        // Shutdown the stream
+                        use std::net::Shutdown;
+                        match stream.shutdown(Shutdown::Both) {
+                            Ok(_) => {
+                                self.value_stack.push(Value::Boolean(true));
+                            }
+                            Err(_e) => {
+                                self.value_stack.push(Value::Boolean(false));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-close expects TcpStream, got {}",
+                            Self::type_name(&stream_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpListenShared => {
+                let port = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpListenShared".to_string()))?;
+
+                match port {
+                    Value::Integer(p) => {
+                        let addr = format!("0.0.0.0:{}", p);
+                        match std::net::TcpListener::bind(&addr) {
+                            Ok(listener) => {
+                                // Use Arc for thread-safe sharing
+                                self.value_stack.push(Value::SharedTcpListener(Arc::new(listener)));
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::new(format!(
+                                    "http-listen-shared: failed to bind to {}: {}",
+                                    addr, e
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-listen-shared expects integer port, got {}",
+                            Self::type_name(&port)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HttpServeParallel => {
+                use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+                use std::io::{BufRead, BufReader};
+
+                // Pop arguments: max_requests, num_workers, handler, listener
+                let max_requests_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpServeParallel".to_string()))?;
+                let num_workers_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpServeParallel".to_string()))?;
+                let handler = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpServeParallel".to_string()))?;
+                let listener_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in HttpServeParallel".to_string()))?;
+
+                // Validate arguments
+                let max_requests = match max_requests_val {
+                    Value::Integer(n) if n > 0 => n as usize,
+                    _ => return Err(RuntimeError::new("http-serve-parallel: max_requests must be a positive integer".to_string())),
+                };
+
+                let num_workers = match num_workers_val {
+                    Value::Integer(n) if n > 0 => n as usize,
+                    _ => return Err(RuntimeError::new("http-serve-parallel: num_workers must be a positive integer".to_string())),
+                };
+
+                let listener = match &listener_val {
+                    Value::SharedTcpListener(l) => Arc::clone(l),
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: http-serve-parallel expects SharedTcpListener, got {}",
+                        Self::type_name(&listener_val)
+                    ))),
+                };
+
+                // Extract handler closure - we need to handle both named functions and closures
+                let handler_name: Option<String> = match &handler {
+                    Value::Function(name) => Some(name.to_string()),
+                    Value::Closure(_) => None,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: http-serve-parallel expects function or closure, got {}",
+                            Self::type_name(&handler)
+                        )));
+                    }
+                };
+
+                // For closures, we need to serialize them to a Send-safe format
+                // Since bytecode can contain Push(Value) with Rc types, we convert to a simple format
+                let handler_data: Option<(Vec<u8>, Vec<String>, Option<String>)> = match &handler {
+                    Value::Closure(closure_data) => {
+                        // Serialize the closure bytecode to bytes (which is Send)
+                        let bytecode_bytes = crate::vm::bytecode::serialize_bytecode(
+                            &HashMap::new(),
+                            &closure_data.body
+                        );
+                        Some((bytecode_bytes, closure_data.params.clone(), closure_data.rest_param.clone()))
+                    }
+                    _ => None,
+                };
+
+                // Serialize function table to bytes (Send-safe)
+                let functions_bytes: Vec<(String, Vec<u8>)> = self.functions.iter()
+                    .map(|(name, bytecode)| {
+                        let bytes = crate::vm::bytecode::serialize_bytecode(&HashMap::new(), bytecode);
+                        (name.clone(), bytes)
+                    })
+                    .collect();
+
+                // Shared counters
+                let request_count = Arc::new(AtomicUsize::new(0));
+                let should_stop = Arc::new(AtomicBool::new(false));
+
+                // Set blocking mode for accept
+                listener.set_nonblocking(false).ok();
+
+                // Spawn worker threads using std::thread::scope
+                std::thread::scope(|s| {
+                    for _worker_id in 0..num_workers {
+                        let listener = Arc::clone(&listener);
+                        let request_count = Arc::clone(&request_count);
+                        let should_stop = Arc::clone(&should_stop);
+                        let functions_bytes = functions_bytes.clone();
+                        let handler_name = handler_name.clone();
+                        let handler_data = handler_data.clone();
+
+                        s.spawn(move || {
+                            // Reconstruct function table from bytes in this thread
+                            let mut functions: HashMap<String, Vec<Instruction>> = HashMap::new();
+                            for (name, bytes) in &functions_bytes {
+                                if let Ok((_, bytecode)) = crate::vm::bytecode::deserialize_bytecode(bytes) {
+                                    functions.insert(name.clone(), bytecode);
+                                }
+                            }
+
+                            // Reconstruct handler closure if needed
+                            let (func_bytecode, func_params, func_rest): (Vec<Instruction>, Vec<String>, Option<String>) =
+                                if let Some((bytes, params, rest)) = &handler_data {
+                                    if let Ok((_, bytecode)) = crate::vm::bytecode::deserialize_bytecode(bytes) {
+                                        (bytecode, params.clone(), rest.clone())
+                                    } else {
+                                        return; // Can't proceed without handler
+                                    }
+                                } else if let Some(name) = &handler_name {
+                                    if let Some(bytecode) = functions.get(name) {
+                                        (bytecode.clone(), vec!["request".to_string()], None)
+                                    } else {
+                                        return; // Function not found
+                                    }
+                                } else {
+                                    return; // No handler
+                                };
+
+                            // Worker loop: accept and handle connections
+                            loop {
+                                if should_stop.load(Ordering::Relaxed) {
+                                    break;
+                                }
+
+                                // Check if we've hit the request limit
+                                if request_count.load(Ordering::Relaxed) >= max_requests {
+                                    should_stop.store(true, Ordering::Relaxed);
+                                    break;
+                                }
+
+                                // Accept a connection (blocking)
+                                let stream = match listener.accept() {
+                                    Ok((stream, _addr)) => stream,
+                                    Err(_) => continue,
+                                };
+
+                                // Handle keep-alive connections on this stream
+                                let mut reader = BufReader::with_capacity(8192, &stream);
+
+                                loop {
+                                    // Check request limit
+                                    let current = request_count.load(Ordering::Relaxed);
+                                    if current >= max_requests {
+                                        should_stop.store(true, Ordering::Relaxed);
+                                        break;
+                                    }
+
+                                    // Read request line
+                                    let mut line_buf = Vec::with_capacity(256);
+                                    if reader.read_until(b'\n', &mut line_buf).unwrap_or(0) == 0 {
+                                        break; // Connection closed
+                                    }
+
+                                    let request_line = String::from_utf8_lossy(&line_buf).trim().to_string();
+                                    if request_line.is_empty() {
+                                        break; // Connection closed
+                                    }
+
+                                    // Parse request line
+                                    let parts: Vec<&str> = request_line.split_whitespace().collect();
+                                    if parts.len() < 2 {
+                                        break; // Invalid request
+                                    }
+
+                                    let method = parts[0].to_string();
+                                    let path = parts[1].to_string();
+
+                                    // Read headers
+                                    let mut headers = HashMap::new();
+                                    let mut content_length = 0;
+
+                                    loop {
+                                        line_buf.clear();
+                                        if reader.read_until(b'\n', &mut line_buf).unwrap_or(0) == 0 {
+                                            break;
+                                        }
+
+                                        let line = String::from_utf8_lossy(&line_buf).trim().to_string();
+                                        if line.is_empty() {
+                                            break;
+                                        }
+
+                                        if let Some(colon_pos) = line.find(':') {
+                                            let key = line[..colon_pos].trim().to_lowercase();
+                                            let value = line[colon_pos + 1..].trim().to_string();
+
+                                            if key == "content-length" {
+                                                content_length = value.parse().unwrap_or(0);
+                                            }
+
+                                            headers.insert(key, Value::String(Arc::new(value)));
+                                        }
+                                    }
+
+                                    // Read body if present
+                                    let body = if content_length > 0 {
+                                        let mut body_buf = vec![0u8; content_length];
+                                        if std::io::Read::read_exact(&mut reader, &mut body_buf).is_err() {
+                                            break;
+                                        }
+                                        String::from_utf8_lossy(&body_buf).into_owned()
+                                    } else {
+                                        String::new()
+                                    };
+
+                                    // Build request hashmap
+                                    let mut request_map = HashMap::with_capacity(4);
+                                    request_map.insert("method".to_string(), Value::String(Arc::new(method)));
+                                    request_map.insert("path".to_string(), Value::String(Arc::new(path)));
+                                    request_map.insert("body".to_string(), Value::String(Arc::new(body)));
+                                    request_map.insert("headers".to_string(), Value::HashMap(Arc::new(headers)));
+
+                                    // Create mini-VM and execute handler
+                                    let mut thread_vm = VM::new();
+                                    thread_vm.functions = functions.clone();
+
+                                    let response = match thread_vm.execute_closure_call(
+                                        &func_bytecode,
+                                        &func_params,
+                                        &func_rest,
+                                        &vec![], // No captured variables for serialized closures
+                                        &[Value::HashMap(Arc::new(request_map))]
+                                    ) {
+                                        Ok(val) => val,
+                                        Err(_) => {
+                                            // On error, create 500 response
+                                            let mut err_map = HashMap::new();
+                                            err_map.insert("status".to_string(), Value::Integer(500));
+                                            err_map.insert("body".to_string(), Value::String(Arc::new("Internal Server Error".to_string())));
+                                            Value::HashMap(Arc::new(err_map))
+                                        }
+                                    };
+
+                                    // Send response
+                                    if let Value::HashMap(response_map) = response {
+                                        let status = match response_map.get("status") {
+                                            Some(Value::Integer(code)) => *code,
+                                            _ => 200,
+                                        };
+
+                                        let resp_body = match response_map.get("body") {
+                                            Some(Value::String(s)) => s.as_str(),
+                                            _ => "",
+                                        };
+
+                                        let keep_alive = match response_map.get("keep-alive") {
+                                            Some(Value::Boolean(b)) => *b,
+                                            _ => false,
+                                        };
+
+                                        let status_text = match status {
+                                            200 => "OK",
+                                            201 => "Created",
+                                            204 => "No Content",
+                                            400 => "Bad Request",
+                                            404 => "Not Found",
+                                            500 => "Internal Server Error",
+                                            _ => "Unknown",
+                                        };
+
+                                        let connection_header = if keep_alive {
+                                            "Connection: keep-alive\r\n"
+                                        } else {
+                                            "Connection: close\r\n"
+                                        };
+
+                                        let response_str = format!(
+                                            "HTTP/1.1 {} {}\r\nContent-Length: {}\r\n{}Content-Type: text/plain\r\n\r\n{}",
+                                            status, status_text, resp_body.len(), connection_header, resp_body
+                                        );
+
+                                        // Write response
+                                        let write_ref = &stream;
+                                        if std::io::Write::write_all(&mut &*write_ref, response_str.as_bytes()).is_err() {
+                                            break;
+                                        }
+                                        let _ = std::io::Write::flush(&mut &*write_ref);
+
+                                        // Increment request count
+                                        request_count.fetch_add(1, Ordering::Relaxed);
+
+                                        // If not keep-alive, close connection
+                                        if !keep_alive {
+                                            break;
+                                        }
+                                    } else {
+                                        break; // Invalid response from handler
+                                    }
+                                }
+
+                                // Connection done, close stream
+                                let _ = stream.shutdown(std::net::Shutdown::Both);
+                            }
+                        });
+                    }
+                });
+
+                // Return total requests handled
+                let total = request_count.load(Ordering::Relaxed);
+                self.value_stack.push(Value::Integer(total as i64));
+                self.instruction_pointer += 1;
+            }
         }
 
         Ok(())
@@ -2834,6 +3553,9 @@ impl VM {
             Value::Closure { .. } => "closure",
             Value::HashMap(_) => "hashmap",
             Value::Vector(_) => "vector",
+            Value::TcpListener(_) => "tcp-listener",
+            Value::TcpStream(_) => "tcp-stream",
+            Value::SharedTcpListener(_) => "shared-tcp-listener",
         }
     }
 
@@ -2876,6 +3598,9 @@ impl VM {
                     .collect();
                 format!("[{}]", formatted_items.join(" "))
             }
+            Value::TcpListener(_) => "<tcp-listener>".to_string(),
+            Value::TcpStream(_) => "<tcp-stream>".to_string(),
+            Value::SharedTcpListener(_) => "<shared-tcp-listener>".to_string(),
         }
     }
 
@@ -2893,7 +3618,7 @@ impl VM {
         bytecode: &[Instruction],
         params: &[String],
         rest_param: &Option<String>,
-        _captured: &[(String, Value)],  // TODO: Handle captured variables properly
+        captured: &[(String, Value)],
         args: &[Value]
     ) -> Result<Value, RuntimeError> {
         // Validate argument count
@@ -2919,13 +3644,13 @@ impl VM {
         self.instruction_pointer = 0;
         self.halted = false;
 
-        // Create a call frame with the arguments as locals
+        // Create a call frame with the arguments as locals and captured variables
         let frame = Frame {
             return_address: 0,  // Not used for parallel calls
             locals: args.to_vec(),
             return_bytecode: Vec::new(),  // Not used for parallel calls
             function_name: "<parallel>".to_string(),
-            captured: Vec::new(),  // TODO: Pass captured variables
+            captured: captured.iter().map(|(_, v)| v.clone()).collect(),
             stack_base: self.value_stack.len(),
             loop_start: None,
             loop_bindings_start: None,

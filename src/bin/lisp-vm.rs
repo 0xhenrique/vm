@@ -110,5 +110,8 @@ fn format_value(value: &lisp_bytecode_vm::Value) -> String {
             let formatted: Vec<String> = items.iter().map(|v| format_value(v)).collect();
             format!("[{}]", formatted.join(" "))
         }
+        Value::TcpListener(_) => "#<tcp-listener>".to_string(),
+        Value::TcpStream(_) => "#<tcp-stream>".to_string(),
+        Value::SharedTcpListener(_) => "#<shared-tcp-listener>".to_string(),
     }
 }

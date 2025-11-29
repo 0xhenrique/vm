@@ -190,6 +190,21 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::PMap => "PMap".to_string(),
         Instruction::PFilter => "PFilter".to_string(),
         Instruction::PReduce => "PReduce".to_string(),
+        // HTTP/Networking
+        Instruction::HttpListen => "HttpListen".to_string(),
+        Instruction::HttpAccept => "HttpAccept".to_string(),
+        Instruction::HttpReadRequest => "HttpReadRequest".to_string(),
+        Instruction::HttpSendResponse => "HttpSendResponse".to_string(),
+        Instruction::HttpClose => "HttpClose".to_string(),
+        // Multi-threaded HTTP
+        Instruction::HttpListenShared => "HttpListenShared".to_string(),
+        Instruction::HttpServeParallel => "HttpServeParallel".to_string(),
+        // String predicates and utilities
+        Instruction::StringStartsWith => "StringStartsWith".to_string(),
+        Instruction::StringEndsWith => "StringEndsWith".to_string(),
+        Instruction::StringContains => "StringContains".to_string(),
+        Instruction::StringUpcase => "StringUpcase".to_string(),
+        Instruction::StringDowncase => "StringDowncase".to_string(),
     }
 }
 

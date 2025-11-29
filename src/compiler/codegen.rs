@@ -2465,6 +2465,24 @@ impl Compiler {
                     Location::unknown(),
                 ))
             }
+            Value::TcpListener(_) => {
+                Err(CompileError::new(
+                    "Cannot convert tcp-listener to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
+            Value::TcpStream(_) => {
+                Err(CompileError::new(
+                    "Cannot convert tcp-stream to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
+            Value::SharedTcpListener(_) => {
+                Err(CompileError::new(
+                    "Cannot convert shared-tcp-listener to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
         }
     }
 
@@ -3210,6 +3228,9 @@ impl Compiler {
             "string?" | "symbol?" | "symbol->string" | "string->symbol" |
             "string-length" | "substring" | "string-append" | "string->list" |
             "list->string" | "char-code" | "number->string" | "string->number" |
+            "string-split" | "string-join" | "string-trim" | "string-replace" |
+            "string-starts-with?" | "string-ends-with?" | "string-contains?" |
+            "string-upcase" | "string-downcase" |
             // File I/O
             "read-file" | "write-file" | "file-exists?" | "write-binary-file" | "load" | "require" |
             // HashMap operations

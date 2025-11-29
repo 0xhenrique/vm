@@ -64,6 +64,12 @@ pub enum Instruction {
     StringJoin,     // Pop list of strings and delimiter, push joined string
     StringTrim,     // Pop string, push trimmed string (remove leading/trailing whitespace)
     StringReplace,  // Pop string, old, new; push string with all occurrences of old replaced with new
+    // String predicates and utilities
+    StringStartsWith, // Pop string and prefix, push boolean
+    StringEndsWith,   // Pop string and suffix, push boolean
+    StringContains,   // Pop string and substring, push boolean
+    StringUpcase,     // Pop string, push uppercase version
+    StringDowncase,   // Pop string, push lowercase version
     // List manipulation
     Append,         // Pop two lists, push their concatenation (second appended to first)
     MakeList(usize), // Pop N values from stack and create a list from them (in order)
@@ -139,4 +145,13 @@ pub enum Instruction {
     PMap,                // Pop list and function, parallel map, push result list
     PFilter,             // Pop list and predicate, parallel filter, push result list
     PReduce,             // Pop list, initial value, and binary function, parallel reduce, push result
+    // HTTP/Networking (Phase 14)
+    HttpListen,          // Pop port (integer), push TcpListener
+    HttpAccept,          // Pop TcpListener, push TcpStream (blocking)
+    HttpReadRequest,     // Pop TcpStream, push request hashmap (method, path, headers, body)
+    HttpSendResponse,    // Pop TcpStream and response hashmap (status, headers, body), push boolean success
+    HttpClose,           // Pop TcpStream, close connection
+    // Multi-threaded HTTP (Phase 14b)
+    HttpListenShared,    // Pop port (integer), push SharedTcpListener (thread-safe)
+    HttpServeParallel,   // Pop SharedTcpListener, handler closure, num_workers, max_requests; parallel request handling
 }
