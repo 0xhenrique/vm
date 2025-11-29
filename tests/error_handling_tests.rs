@@ -26,20 +26,20 @@ fn get_output(vm: &VM) -> String {
     match vm.value_stack.last() {
         Some(Value::Integer(n)) => n.to_string(),
         Some(Value::Boolean(b)) => if *b { "true".to_string() } else { "false".to_string() },
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => s.to_string(),
         Some(Value::List(items)) => format_list(items),
-        Some(Value::Symbol(s)) => s.clone(),
+        Some(Value::Symbol(s)) => s.to_string(),
         _ => panic!("Unexpected value type"),
     }
 }
 
 /// Helper to format a list for display
-fn format_list(items: &[Value]) -> String {
+fn format_list(items: &lisp_bytecode_vm::vm::value::List) -> String {
     let formatted: Vec<String> = items.iter().map(|v| match v {
         Value::Integer(n) => n.to_string(),
         Value::Boolean(b) => if *b { "true".to_string() } else { "false".to_string() },
-        Value::String(s) => s.clone(),
-        Value::Symbol(s) => s.clone(),
+        Value::String(s) => s.to_string(),
+        Value::Symbol(s) => s.to_string(),
         Value::List(inner) => format_list(inner),
         _ => format!("{:?}", v),
     }).collect();

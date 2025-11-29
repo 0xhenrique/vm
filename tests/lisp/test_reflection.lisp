@@ -1,4 +1,4 @@
-;; EXPECT: "all-tests-passed"
+;; EXPECT: all-tests-passed
 ;; Test reflection features (function introspection)
 
 ;; Test 1: function-arity for regular functions

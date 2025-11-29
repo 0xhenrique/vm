@@ -91,18 +91,18 @@ fn format_value(value: &lisp_bytecode_vm::Value) -> String {
             }
         }
         Value::Boolean(b) => b.to_string(),
-        Value::String(s) => s.clone(),
-        Value::Symbol(s) => s.clone(),
+        Value::String(s) => s.to_string(),
+        Value::Symbol(s) => s.to_string(),
         Value::List(items) => {
             let formatted: Vec<String> = items.iter().map(|v| format_value(v)).collect();
             format!("({})", formatted.join(" "))
         }
         Value::Function(name) => format!("#<function:{}>", name),
-        Value::Closure { params, rest_param, .. } => {
-            if rest_param.is_some() {
-                format!("#<closure/{} + rest>", params.len())
+        Value::Closure(closure_data) => {
+            if closure_data.rest_param.is_some() {
+                format!("#<closure/{} + rest>", closure_data.params.len())
             } else {
-                format!("#<closure/{}>", params.len())
+                format!("#<closure/{}>", closure_data.params.len())
             }
         }
         Value::HashMap(_) => "#<hashmap>".to_string(),

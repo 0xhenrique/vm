@@ -1,4 +1,6 @@
 use lisp_bytecode_vm::{Compiler, VM, parser::Parser};
+use lisp_bytecode_vm::vm::value::List;
+use std::sync::Arc;
 
 fn compile_and_get_result(source: &str) -> i64 {
     let mut parser = Parser::new(source);
@@ -499,7 +501,7 @@ fn test_quoted_symbols() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("+".to_string())));
+    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol(Arc::new("+".to_string()))));
 }
 
 #[test]
@@ -537,7 +539,7 @@ fn test_symbol_string_conversion() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    assert_eq!(vm.value_stack.last(), Some(&Value::String("foo".to_string())));
+    assert_eq!(vm.value_stack.last(), Some(&Value::String(Arc::new("foo".to_string()))));
 
     let source = r#"(string->symbol "bar")"#;
     let mut parser = Parser::new(source);
@@ -551,7 +553,7 @@ fn test_symbol_string_conversion() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("bar".to_string())));
+    assert_eq!(vm.value_stack.last(), Some(&Value::Symbol(Arc::new("bar".to_string()))));
 }
 
 #[test]
@@ -578,13 +580,13 @@ fn test_map_basic() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(2),
         Value::Integer(4),
         Value::Integer(6),
         Value::Integer(8),
         Value::Integer(10),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 
@@ -612,7 +614,7 @@ fn test_map_empty_list() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
+    assert_eq!(vm.value_stack.last(), Some(&Value::List(List::Nil)));
 }
 
 #[test]
@@ -640,11 +642,11 @@ fn test_filter_basic() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(3),
         Value::Integer(4),
         Value::Integer(5),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 
@@ -673,11 +675,11 @@ fn test_filter_all_pass() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(1),
         Value::Integer(2),
         Value::Integer(3),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 
@@ -706,7 +708,7 @@ fn test_filter_none_pass() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
+    assert_eq!(vm.value_stack.last(), Some(&Value::List(List::Nil)));
 }
 
 #[test]
@@ -781,11 +783,11 @@ fn test_map_with_closure() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(11),
         Value::Integer(12),
         Value::Integer(13),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 
@@ -817,11 +819,11 @@ fn test_filter_with_closure() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(6),
         Value::Integer(8),
         Value::Integer(9),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 
@@ -857,11 +859,11 @@ fn test_compose_map_and_filter() {
     vm.current_bytecode = main;
     vm.run().unwrap();
 
-    let expected = Value::List(vec![
+    let expected = Value::List(List::from_vec(vec![
         Value::Integer(6),
         Value::Integer(8),
         Value::Integer(10),
-    ]);
+    ]));
     assert_eq!(vm.value_stack.last(), Some(&expected));
 }
 

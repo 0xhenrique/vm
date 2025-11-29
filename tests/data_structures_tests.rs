@@ -37,10 +37,10 @@ fn format_value(value: &Value) -> String {
             let formatted_items: Vec<String> = items.iter().map(|v| format_value(v)).collect();
             format!("({})", formatted_items.join(" "))
         }
-        Value::Symbol(s) => s.clone(),
+        Value::Symbol(s) => s.to_string(),
         Value::String(s) => format!("\"{}\"", s),
         Value::Function(name) => format!("<function {}>", name),
-        Value::Closure { params, .. } => format!("<closure/{}>", params.len()),
+        Value::Closure(closure_data) => format!("<closure/{}>", closure_data.params.len()),
         Value::HashMap(map) => {
             let mut items: Vec<String> = map.iter()
                 .map(|(k, v)| format!("\"{}\" {}", k, format_value(v)))

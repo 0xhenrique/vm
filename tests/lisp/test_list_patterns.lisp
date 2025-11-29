@@ -1,7 +1,9 @@
-;; SKIP
-;; Reason: Requires pattern matching and destructuring in function parameters (Phase 8)
-(defun first ((h . _) h))
-(defun rest ((_ . t) t))
+;; EXPECT: 5
+;; Test list patterns - patterns must be wrapped in an extra paren for single arg functions
+
+;; Fixed syntax: (((pattern)) body) for single-arg functions with cons patterns
+(defun first (((h . _)) h))
+(defun rest (((_ . t)) t))
 
 (defun len
   (('()) 0)

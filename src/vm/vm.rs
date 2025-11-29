@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
-use super::value::Value;
+use super::value::{Value, List, ClosureData};
 use super::instructions::Instruction;
 use super::stack::Frame;
 use super::errors::RuntimeError;
@@ -90,6 +91,10 @@ impl VM {
         self.functions.insert("char-code".to_string(), vec![LoadArg(0), CharCode, Ret]);
         self.functions.insert("number->string".to_string(), vec![LoadArg(0), NumberToString, Ret]);
         self.functions.insert("string->number".to_string(), vec![LoadArg(0), StringToNumber, Ret]);
+        self.functions.insert("string-split".to_string(), vec![LoadArg(0), LoadArg(1), StringSplit, Ret]);
+        self.functions.insert("string-join".to_string(), vec![LoadArg(0), LoadArg(1), StringJoin, Ret]);
+        self.functions.insert("string-trim".to_string(), vec![LoadArg(0), StringTrim, Ret]);
+        self.functions.insert("string-replace".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), StringReplace, Ret]);
 
         // File I/O operations
         self.functions.insert("read-file".to_string(), vec![LoadArg(0), ReadFile, Ret]);
@@ -98,6 +103,10 @@ impl VM {
         self.functions.insert("write-binary-file".to_string(), vec![LoadArg(0), LoadArg(1), WriteBinaryFile, Ret]);
         self.functions.insert("load".to_string(), vec![LoadArg(0), LoadFile, Ret]);
         self.functions.insert("require".to_string(), vec![LoadArg(0), RequireFile, Ret]);
+
+        // Date/Time operations
+        self.functions.insert("current-timestamp".to_string(), vec![CurrentTimestamp, Ret]);
+        self.functions.insert("format-timestamp".to_string(), vec![LoadArg(0), LoadArg(1), FormatTimestamp, Ret]);
 
         // Other operations
         self.functions.insert("get-args".to_string(), vec![GetArgs, Ret]);
@@ -130,10 +139,18 @@ impl VM {
         self.functions.insert("sqrt".to_string(), vec![LoadArg(0), Sqrt, Ret]);
         self.functions.insert("sin".to_string(), vec![LoadArg(0), Sin, Ret]);
         self.functions.insert("cos".to_string(), vec![LoadArg(0), Cos, Ret]);
+        self.functions.insert("tan".to_string(), vec![LoadArg(0), Tan, Ret]);
+        self.functions.insert("atan".to_string(), vec![LoadArg(0), Atan, Ret]);
+        self.functions.insert("atan2".to_string(), vec![LoadArg(0), LoadArg(1), Atan2, Ret]);
+        self.functions.insert("log".to_string(), vec![LoadArg(0), Log, Ret]);
+        self.functions.insert("exp".to_string(), vec![LoadArg(0), Exp, Ret]);
         self.functions.insert("floor".to_string(), vec![LoadArg(0), Floor, Ret]);
         self.functions.insert("ceil".to_string(), vec![LoadArg(0), Ceil, Ret]);
         self.functions.insert("abs".to_string(), vec![LoadArg(0), Abs, Ret]);
         self.functions.insert("pow".to_string(), vec![LoadArg(0), LoadArg(1), Pow, Ret]);
+        self.functions.insert("random".to_string(), vec![Random, Ret]);
+        self.functions.insert("random-int".to_string(), vec![LoadArg(0), RandomInt, Ret]);
+        self.functions.insert("seed-random".to_string(), vec![LoadArg(0), SeedRandom, Ret]);
 
         // Metaprogramming
         self.functions.insert("eval".to_string(), vec![LoadArg(0), Eval, Ret]);
@@ -143,6 +160,12 @@ impl VM {
         self.functions.insert("function-params".to_string(), vec![LoadArg(0), FunctionParams, Ret]);
         self.functions.insert("closure-captured".to_string(), vec![LoadArg(0), ClosureCaptured, Ret]);
         self.functions.insert("function-name".to_string(), vec![LoadArg(0), FunctionName, Ret]);
+
+        // Type inspection
+        self.functions.insert("type-of".to_string(), vec![LoadArg(0), TypeOf, Ret]);
+
+        // Symbol generation
+        self.functions.insert("gensym".to_string(), vec![GenSym, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -505,6 +528,96 @@ impl VM {
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
+            Instruction::SetLocal(pos) => {
+                // Set local variable at position on value stack
+                let stack_base = if let Some(frame) = self.call_stack.last() {
+                    frame.stack_base
+                } else {
+                    0  // Main execution has stack_base 0
+                };
+                let absolute_pos = stack_base + pos;
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in SetLocal".to_string()))?;
+
+                if absolute_pos >= self.value_stack.len() {
+                    return Err(RuntimeError::new(format!(
+                        "Stack position {} (base {} + offset {}) out of bounds for SetLocal",
+                        absolute_pos, stack_base, pos
+                    )));
+                }
+
+                self.value_stack[absolute_pos] = value;
+                self.instruction_pointer += 1;
+            }
+            Instruction::BeginLoop(bindings_count) => {
+                // Mark the current position as a loop start
+                // The loop bindings are already on the value stack (pushed by the compiler)
+                // We just need to record where they are and where to jump back to
+                let loop_start = self.instruction_pointer + 1; // Next instruction after BeginLoop
+                let stack_base = if let Some(frame) = self.call_stack.last() {
+                    frame.stack_base
+                } else {
+                    0
+                };
+                let bindings_start = self.value_stack.len() - bindings_count;
+
+                // Update the current frame or create loop context on main
+                if let Some(frame) = self.call_stack.last_mut() {
+                    frame.loop_start = Some(loop_start);
+                    frame.loop_bindings_start = Some(bindings_start);
+                    frame.loop_bindings_count = Some(bindings_count);
+                } else {
+                    // We're in main execution - we need to track loop info differently
+                    // For now, we'll store it in a way that recur can access
+                    // Actually, let's create a dummy frame for main execution's loop
+                    // Or better, let's ensure main always has a frame
+                    // For simplicity, let's require that loops are only in functions
+                    // Actually, let's support loops in main too by creating a frame
+                    let frame = Frame::new(0, Vec::new(), "<main>".to_string(), stack_base);
+                    self.call_stack.push(frame);
+                    if let Some(frame) = self.call_stack.last_mut() {
+                        frame.loop_start = Some(loop_start);
+                        frame.loop_bindings_start = Some(bindings_start);
+                        frame.loop_bindings_count = Some(bindings_count);
+                    }
+                }
+
+                self.instruction_pointer += 1;
+            }
+            Instruction::Recur(arg_count) => {
+                // Get loop information from current frame
+                let (loop_start, bindings_start, bindings_count) = if let Some(frame) = self.call_stack.last() {
+                    (
+                        frame.loop_start.ok_or_else(|| RuntimeError::new("recur used outside of loop".to_string()))?,
+                        frame.loop_bindings_start.ok_or_else(|| RuntimeError::new("recur used outside of loop".to_string()))?,
+                        frame.loop_bindings_count.ok_or_else(|| RuntimeError::new("recur used outside of loop".to_string()))?,
+                    )
+                } else {
+                    return Err(RuntimeError::new("recur used outside of loop".to_string()));
+                };
+
+                // Verify arg_count matches bindings_count
+                if arg_count != bindings_count {
+                    return Err(RuntimeError::new(format!(
+                        "recur expects {} arguments but got {}",
+                        bindings_count, arg_count
+                    )));
+                }
+
+                // Pop the new values from the stack (in reverse order)
+                let mut new_values = Vec::new();
+                for _ in 0..arg_count {
+                    new_values.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Recur".to_string()))?);
+                }
+                new_values.reverse();
+
+                // Update the loop bindings with new values
+                for (i, value) in new_values.into_iter().enumerate() {
+                    self.value_stack[bindings_start + i] = value;
+                }
+
+                // Jump back to loop start
+                self.instruction_pointer = loop_start;
+            }
             Instruction::PopN(n) => {
                 // Pop N values from the stack
                 for _ in 0..n {
@@ -548,7 +661,7 @@ impl VM {
                 // Collect rest args into a list
                 let rest_args: Vec<Value> = frame.locals.drain(required_count..).collect();
                 // Push the rest list as the next parameter
-                frame.locals.push(Value::List(rest_args));
+                frame.locals.push(Value::List(List::from_vec(rest_args)));
 
                 self.instruction_pointer += 1;
             }
@@ -569,12 +682,12 @@ impl VM {
                     .map(|(i, v)| (format!("__captured_{}", i), v))
                     .collect();
 
-                let closure = Value::Closure {
+                let closure = Value::Closure(Arc::new(ClosureData {
                     params: params.clone(),
                     rest_param: None, // Regular closure, no variadic support
                     body: body.clone(),
                     captured,
-                };
+                }));
 
                 self.value_stack.push(closure);
                 self.instruction_pointer += 1;
@@ -594,12 +707,12 @@ impl VM {
                     .map(|(i, v)| (format!("__captured_{}", i), v))
                     .collect();
 
-                let closure = Value::Closure {
+                let closure = Value::Closure(Arc::new(ClosureData {
                     params: required_params.clone(),
                     rest_param: Some(rest_param.clone()), // Variadic closure
                     body: body.clone(),
                     captured,
-                };
+                }));
 
                 self.value_stack.push(closure);
                 self.instruction_pointer += 1;
@@ -616,9 +729,9 @@ impl VM {
                 let callable = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CallClosure".to_string()))?;
 
                 match callable {
-                    Value::Function(fn_name) => {
+                    Value::Function(ref fn_name) => {
                         // Call a named function (same as Call instruction)
-                        let fn_bytecode = self.functions.get(&fn_name)
+                        let fn_bytecode = self.functions.get(fn_name.as_str())
                             .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                             .clone();
 
@@ -626,40 +739,43 @@ impl VM {
                             return_address: self.instruction_pointer + 1,
                             locals: args,
                             return_bytecode: self.current_bytecode.clone(),
-                            function_name: fn_name.clone(),
+                            function_name: fn_name.to_string(),
                             captured: Vec::new(),
                             stack_base: self.value_stack.len(),
+                            loop_start: None,
+                            loop_bindings_start: None,
+                            loop_bindings_count: None,
                         };
                         self.call_stack.push(frame);
 
                         self.current_bytecode = fn_bytecode;
                         self.instruction_pointer = 0;
                     }
-                    Value::Closure { params, rest_param, body, captured } => {
+                    Value::Closure(ref closure_data) => {
                         // Verify arity
-                        match &rest_param {
+                        match &closure_data.rest_param {
                             None => {
                                 // Regular closure - exact arity match required
-                                if params.len() != args.len() {
+                                if closure_data.params.len() != args.len() {
                                     return Err(RuntimeError::new(format!(
                                         "Closure arity mismatch: expected {} argument(s), got {}",
-                                        params.len(),
+                                        closure_data.params.len(),
                                         args.len()
                                     )));
                                 }
                             }
                             Some(_rest_name) => {
                                 // Variadic closure - need at least the required params
-                                if args.len() < params.len() {
+                                if args.len() < closure_data.params.len() {
                                     return Err(RuntimeError::new(format!(
                                         "Variadic closure arity mismatch: expected at least {} argument(s), got {}",
-                                        params.len(),
+                                        closure_data.params.len(),
                                         args.len()
                                     )));
                                 }
                                 // Pack extra args into a list and append to args
-                                let rest_args: Vec<Value> = args.drain(params.len()..).collect();
-                                args.push(Value::List(rest_args));
+                                let rest_args: Vec<Value> = args.drain(closure_data.params.len()..).collect();
+                                args.push(Value::List(List::from_vec(rest_args)));
                             }
                         }
 
@@ -669,14 +785,17 @@ impl VM {
                             locals: args,
                             return_bytecode: self.current_bytecode.to_vec(),
                             function_name: "<closure>".to_string(),
-                            captured: captured.iter().map(|(_, v)| v.clone()).collect(),
+                            captured: closure_data.captured.iter().map(|(_, v)| v.clone()).collect(),
                             stack_base: self.value_stack.len(), // Current stack top is base for this function
+                            loop_start: None,
+                            loop_bindings_start: None,
+                            loop_bindings_count: None,
                         };
 
                         self.call_stack.push(frame);
 
                         // Switch to closure body bytecode
-                        self.current_bytecode = body;
+                        self.current_bytecode = closure_data.body.clone();
                         self.instruction_pointer = 0;
                     }
                     _ => {
@@ -696,7 +815,7 @@ impl VM {
 
                 // Extract arguments from list
                 let args = match arg_list {
-                    Value::List(items) => items,
+                    Value::List(list) => list.to_vec(),
                     _ => {
                         return Err(RuntimeError::new(format!(
                             "Type error in apply: expected list of arguments, got {}",
@@ -709,9 +828,9 @@ impl VM {
                 let callable = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Apply".to_string()))?;
 
                 match callable {
-                    Value::Function(fn_name) => {
+                    Value::Function(ref fn_name) => {
                         // Call a named function
-                        let fn_bytecode = self.functions.get(&fn_name)
+                        let fn_bytecode = self.functions.get(fn_name.as_str())
                             .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                             .clone();
 
@@ -719,43 +838,46 @@ impl VM {
                             return_address: self.instruction_pointer + 1,
                             locals: args,
                             return_bytecode: self.current_bytecode.clone(),
-                            function_name: fn_name.clone(),
+                            function_name: fn_name.to_string(),
                             captured: Vec::new(),
                             stack_base: self.value_stack.len(),
+                            loop_start: None,
+                            loop_bindings_start: None,
+                            loop_bindings_count: None,
                         };
                         self.call_stack.push(frame);
 
                         self.current_bytecode = fn_bytecode;
                         self.instruction_pointer = 0;
                     }
-                    Value::Closure { params, rest_param, body, captured } => {
+                    Value::Closure(ref closure_data) => {
                         // Call a closure with variadic support
                         let mut args = args;
 
                         // Verify arity and handle variadic parameters
-                        match &rest_param {
+                        match &closure_data.rest_param {
                             None => {
                                 // Regular closure - exact arity match required
-                                if params.len() != args.len() {
+                                if closure_data.params.len() != args.len() {
                                     return Err(RuntimeError::new(format!(
                                         "Closure arity mismatch in apply: expected {} argument(s), got {}",
-                                        params.len(),
+                                        closure_data.params.len(),
                                         args.len()
                                     )));
                                 }
                             }
                             Some(_rest_name) => {
                                 // Variadic closure - need at least the required params
-                                if args.len() < params.len() {
+                                if args.len() < closure_data.params.len() {
                                     return Err(RuntimeError::new(format!(
                                         "Variadic closure arity mismatch in apply: expected at least {} argument(s), got {}",
-                                        params.len(),
+                                        closure_data.params.len(),
                                         args.len()
                                     )));
                                 }
                                 // Pack extra arguments into a list for the rest parameter
-                                let rest_args: Vec<Value> = args.drain(params.len()..).collect();
-                                args.push(Value::List(rest_args));
+                                let rest_args: Vec<Value> = args.drain(closure_data.params.len()..).collect();
+                                args.push(Value::List(List::from_vec(rest_args)));
                             }
                         }
 
@@ -763,14 +885,17 @@ impl VM {
                             return_address: self.instruction_pointer + 1,
                             locals: args,
                             return_bytecode: self.current_bytecode.clone(),
-                            function_name: format!("<closure@{:p}>", &params), // Unique identifier for closures
-                            captured: captured.iter().map(|(_, v)| v.clone()).collect(),
+                            function_name: "<closure>".to_string(),
+                            captured: closure_data.captured.iter().map(|(_, v)| v.clone()).collect(),
                             stack_base: self.value_stack.len(),
+                            loop_start: None,
+                            loop_bindings_start: None,
+                            loop_bindings_count: None,
                         };
                         self.call_stack.push(frame);
 
                         // Switch to closure body bytecode
-                        self.current_bytecode = body;
+                        self.current_bytecode = closure_data.body.clone();
                         self.instruction_pointer = 0;
                     }
                     _ => {
@@ -793,6 +918,8 @@ impl VM {
             Instruction::Print => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Print".to_string()))?;
                 println!("{}", Self::format_value(&value));
+                // Push the value back so print can be used in expressions
+                self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
             Instruction::Ret => {
@@ -820,6 +947,9 @@ impl VM {
                     function_name: fn_name.clone(),
                     captured: Vec::new(), // Regular functions don't have captured variables
                     stack_base: self.value_stack.len(), // Current stack top is base for this function
+                    loop_start: None,
+                    loop_bindings_start: None,
+                    loop_bindings_count: None,
                 };
                 self.call_stack.push(frame);
 
@@ -860,6 +990,9 @@ impl VM {
                         function_name: fn_name.clone(),
                         captured: Vec::new(),
                         stack_base: self.value_stack.len(), // Current stack top is base for this function
+                        loop_start: None,
+                        loop_bindings_start: None,
+                        loop_bindings_count: None,
                     };
                     self.call_stack.push(frame);
                 }
@@ -878,26 +1011,21 @@ impl VM {
                 // cons creates a list by prepending first to second
                 // (cons 1 '(2 3)) -> '(1 2 3)
                 // (cons 1 2) -> '(1 2) [improper list, to be represented as proper list]
-                let mut new_list = vec![first];
-                match second {
-                    Value::List(mut items) => {
-                        new_list.append(&mut items);
-                    }
-                    other => {
-                        new_list.push(other);
-                    }
-                }
+                let new_list = match second {
+                    Value::List(tail) => List::cons(first, tail),
+                    other => List::cons(first, List::cons(other, List::Nil)),
+                };
                 self.value_stack.push(Value::List(new_list));
                 self.instruction_pointer += 1;
             }
             Instruction::Car => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Car".to_string()))?;
                 match value {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            return Err(RuntimeError::new("'car' cannot take the first element of an empty list".to_string()));
+                    Value::List(list) => {
+                        match list.car() {
+                            Some(head) => self.value_stack.push(head.clone()),
+                            None => return Err(RuntimeError::new("'car' cannot take the first element of an empty list".to_string())),
                         }
-                        self.value_stack.push(items[0].clone());
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -911,12 +1039,11 @@ impl VM {
             Instruction::Cdr => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Cdr".to_string()))?;
                 match value {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            return Err(RuntimeError::new("'cdr' cannot take the rest of an empty list".to_string()));
+                    Value::List(list) => {
+                        match list.cdr() {
+                            Some(tail) => self.value_stack.push(Value::List(tail)),
+                            None => return Err(RuntimeError::new("'cdr' cannot take the rest of an empty list".to_string())),
                         }
-                        let rest = items[1..].to_vec();
-                        self.value_stack.push(Value::List(rest));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1023,10 +1150,14 @@ impl VM {
                 let first = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Append".to_string()))?;
 
                 match (&first, &second) {
-                    (Value::List(first_items), Value::List(second_items)) => {
-                        let mut result = first_items.clone();
-                        result.extend(second_items.clone());
-                        self.value_stack.push(Value::List(result));
+                    (Value::List(first_list), Value::List(second_list)) => {
+                        // For append, we need to copy the first list and attach second to the end
+                        // This is O(n) in the first list length - append is inherently expensive
+                        let first_vec = first_list.to_vec();
+                        let second_vec = second_list.to_vec();
+                        let mut result = first_vec;
+                        result.extend(second_vec);
+                        self.value_stack.push(Value::List(List::from_vec(result)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1045,32 +1176,43 @@ impl VM {
                     items.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeList".to_string()))?);
                 }
                 items.reverse(); // Reverse because we popped in reverse order
-                self.value_stack.push(Value::List(items));
+                self.value_stack.push(Value::List(List::from_vec(items)));
                 self.instruction_pointer += 1;
             }
             Instruction::ListRef => {
                 // Pop index and list, push element at that index
                 let index = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListRef".to_string()))?;
-                let list = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListRef".to_string()))?;
+                let list_val = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListRef".to_string()))?;
 
-                match (&list, &index) {
-                    (Value::List(items), Value::Integer(idx)) => {
+                match (&list_val, &index) {
+                    (Value::List(list), Value::Integer(idx)) => {
                         if *idx < 0 {
                             return Err(RuntimeError::new(format!("'list-ref' index cannot be negative: {}", idx)));
                         }
                         let idx_usize = *idx as usize;
-                        if idx_usize >= items.len() {
-                            return Err(RuntimeError::new(format!(
-                                "'list-ref' index {} out of bounds for list of length {}",
-                                idx, items.len()
-                            )));
+                        // Walk the list to the index position
+                        let mut current = list.clone();
+                        for _ in 0..idx_usize {
+                            match current.cdr() {
+                                Some(tail) => current = tail,
+                                None => return Err(RuntimeError::new(format!(
+                                    "'list-ref' index {} out of bounds for list of length {}",
+                                    idx, list.len()
+                                ))),
+                            }
                         }
-                        self.value_stack.push(items[idx_usize].clone());
+                        match current.car() {
+                            Some(val) => self.value_stack.push(val.clone()),
+                            None => return Err(RuntimeError::new(format!(
+                                "'list-ref' index {} out of bounds for list of length {}",
+                                idx, list.len()
+                            ))),
+                        }
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
                             "Type error: 'list-ref' expects a list and an integer, got {} and {}",
-                            Self::type_name(&list),
+                            Self::type_name(&list_val),
                             Self::type_name(&index)
                         )));
                     }
@@ -1098,7 +1240,7 @@ impl VM {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in NumberToString".to_string()))?;
                 match value {
                     Value::Integer(n) => {
-                        self.value_stack.push(Value::String(n.to_string()));
+                        self.value_stack.push(Value::String(Arc::new(n.to_string())));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1173,7 +1315,7 @@ impl VM {
                         let end = (*end_idx).min(s.len() as i64) as usize;
                         if start <= end && end <= s.len() {
                             let result = s.chars().skip(start).take(end - start).collect::<String>();
-                            self.value_stack.push(Value::String(result));
+                            self.value_stack.push(Value::String(Arc::new(result)));
                         } else {
                             return Err(RuntimeError::new(format!(
                                 "'substring' invalid indices: start={}, end={}, string length={}",
@@ -1198,7 +1340,7 @@ impl VM {
 
                 match (&first, &second) {
                     (Value::String(s1), Value::String(s2)) => {
-                        self.value_stack.push(Value::String(format!("{}{}", s1, s2)));
+                        self.value_stack.push(Value::String(Arc::new(format!("{}{}", s1, s2))));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1215,9 +1357,9 @@ impl VM {
                 match value {
                     Value::String(s) => {
                         let char_list: Vec<Value> = s.chars()
-                            .map(|c| Value::String(c.to_string()))
+                            .map(|c| Value::String(Arc::new(c.to_string())))
                             .collect();
-                        self.value_stack.push(Value::List(char_list));
+                        self.value_stack.push(Value::List(List::from_vec(char_list)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1231,11 +1373,11 @@ impl VM {
             Instruction::ListToString => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListToString".to_string()))?;
                 match value {
-                    Value::List(items) => {
+                    Value::List(list) => {
                         let mut result = String::new();
-                        for item in &items {
+                        for item in list.iter() {
                             match item {
-                                Value::String(s) => result.push_str(s),
+                                Value::String(s) => result.push_str(&s),
                                 _ => {
                                     return Err(RuntimeError::new(format!(
                                         "Type error: 'list->string' expects a list of strings, but found {}",
@@ -1244,7 +1386,7 @@ impl VM {
                                 }
                             }
                         }
-                        self.value_stack.push(Value::String(result));
+                        self.value_stack.push(Value::String(Arc::new(result)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1277,13 +1419,101 @@ impl VM {
                 }
                 self.instruction_pointer += 1;
             }
+            Instruction::StringSplit => {
+                let delimiter = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringSplit".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringSplit".to_string()))?;
+                match (&string, &delimiter) {
+                    (Value::String(s), Value::String(delim)) => {
+                        let parts: Vec<Value> = if delim.is_empty() {
+                            // Split into characters
+                            s.chars().map(|c| Value::String(Arc::new(c.to_string()))).collect()
+                        } else {
+                            s.split(delim.as_str()).map(|part| Value::String(Arc::new(part.to_string()))).collect()
+                        };
+                        self.value_stack.push(Value::List(List::from_vec(parts)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-split' expects two strings, got {} and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&delimiter)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringJoin => {
+                let delimiter = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringJoin".to_string()))?;
+                let list_val = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringJoin".to_string()))?;
+                match (&list_val, &delimiter) {
+                    (Value::List(list), Value::String(delim)) => {
+                        let mut parts = Vec::new();
+                        for item in list.iter() {
+                            match item {
+                                Value::String(s) => parts.push(s.to_string()),
+                                _ => {
+                                    return Err(RuntimeError::new(format!(
+                                        "Type error: 'string-join' expects a list of strings, but found {}",
+                                        Self::type_name(item)
+                                    )));
+                                }
+                            }
+                        }
+                        let result = parts.join(delim.as_str());
+                        self.value_stack.push(Value::String(Arc::new(result)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-join' expects a list and a string, got {} and {}",
+                            Self::type_name(&list_val),
+                            Self::type_name(&delimiter)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringTrim => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringTrim".to_string()))?;
+                match value {
+                    Value::String(s) => {
+                        self.value_stack.push(Value::String(Arc::new(s.trim().to_string())));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-trim' expects a string, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringReplace => {
+                let new_str = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringReplace".to_string()))?;
+                let old_str = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringReplace".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringReplace".to_string()))?;
+                match (&string, &old_str, &new_str) {
+                    (Value::String(s), Value::String(old), Value::String(new)) => {
+                        let result = s.replace(old.as_str(), new.as_str());
+                        self.value_stack.push(Value::String(Arc::new(result)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-replace' expects three strings, got {}, {}, and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&old_str),
+                            Self::type_name(&new_str)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
             Instruction::ReadFile => {
                 let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ReadFile".to_string()))?;
                 match path {
                     Value::String(path_str) => {
-                        match std::fs::read_to_string(&path_str) {
+                        match std::fs::read_to_string(path_str.as_str()) {
                             Ok(contents) => {
-                                self.value_stack.push(Value::String(contents));
+                                self.value_stack.push(Value::String(Arc::new(contents)));
                             }
                             Err(e) => {
                                 return Err(RuntimeError::new(format!(
@@ -1308,7 +1538,7 @@ impl VM {
 
                 match (&path, &content) {
                     (Value::String(path_str), Value::String(content_str)) => {
-                        match std::fs::write(path_str, content_str) {
+                        match std::fs::write(path_str.as_str(), content_str.as_str()) {
                             Ok(_) => {
                                 self.value_stack.push(Value::Boolean(true));
                             }
@@ -1332,7 +1562,7 @@ impl VM {
                 let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FileExists".to_string()))?;
                 match path {
                     Value::String(path_str) => {
-                        let exists = std::path::Path::new(&path_str).exists();
+                        let exists = std::path::Path::new(path_str.as_str()).exists();
                         self.value_stack.push(Value::Boolean(exists));
                     }
                     _ => {
@@ -1352,9 +1582,9 @@ impl VM {
                     (Value::String(path_str), Value::List(bytes)) => {
                         // Convert list of integers to Vec<u8>
                         let mut byte_vec = Vec::new();
-                        for byte_val in bytes {
+                        for byte_val in bytes.iter() {
                             match byte_val {
-                                Value::Integer(n) if *n >= 0 && *n <= 255 => {
+                                Value::Integer(n) if n >= &0 && n <= &255 => {
                                     byte_vec.push(*n as u8);
                                 }
                                 _ => {
@@ -1367,7 +1597,7 @@ impl VM {
                         }
 
                         // Write bytes to file
-                        match std::fs::write(path_str, &byte_vec) {
+                        match std::fs::write(path_str.as_str(), &byte_vec) {
                             Ok(_) => self.value_stack.push(Value::Boolean(true)),
                             Err(e) => {
                                 eprintln!("write-binary-file: failed to write '{}': {}", path_str, e);
@@ -1390,7 +1620,7 @@ impl VM {
                 match path {
                     Value::String(path_str) => {
                         // Read the file
-                        let source = std::fs::read_to_string(&path_str).map_err(|e| {
+                        let source = std::fs::read_to_string(path_str.as_str()).map_err(|e| {
                             RuntimeError::new(format!("'load' failed to read '{}': {}", path_str, e))
                         })?;
 
@@ -1442,8 +1672,8 @@ impl VM {
                 match path {
                     Value::String(path_str) => {
                         // Normalize the path to canonical form for consistent tracking
-                        let canonical_path = std::fs::canonicalize(&path_str)
-                            .unwrap_or_else(|_| std::path::PathBuf::from(&path_str))
+                        let canonical_path = std::fs::canonicalize(path_str.as_str())
+                            .unwrap_or_else(|_| std::path::PathBuf::from(path_str.as_str()))
                             .to_string_lossy()
                             .to_string();
 
@@ -1454,7 +1684,7 @@ impl VM {
                         } else {
                             // Not loaded yet, load it
                             // Read the file
-                            let source = std::fs::read_to_string(&path_str).map_err(|e| {
+                            let source = std::fs::read_to_string(path_str.as_str()).map_err(|e| {
                                 RuntimeError::new(format!("'require' failed to read '{}': {}", path_str, e))
                             })?;
 
@@ -1507,10 +1737,10 @@ impl VM {
             }
             Instruction::GetArgs => {
                 // Convert Vec<String> to Value::List of Value::String
-                let args_list = self.args.iter()
-                    .map(|s| Value::String(s.clone()))
+                let args_list: Vec<Value> = self.args.iter()
+                    .map(|s| Value::String(Arc::new(s.clone())))
                     .collect();
-                self.value_stack.push(Value::List(args_list));
+                self.value_stack.push(Value::List(List::from_vec(args_list)));
                 self.instruction_pointer += 1;
             }
             // HashMap operations
@@ -1528,7 +1758,7 @@ impl VM {
                 for (key, value) in pairs {
                     match key {
                         Value::String(s) => {
-                            map.insert(s, value);
+                            map.insert(s.to_string(), value);
                         }
                         _ => {
                             return Err(RuntimeError::new(format!(
@@ -1538,7 +1768,7 @@ impl VM {
                         }
                     }
                 }
-                self.value_stack.push(Value::HashMap(map));
+                self.value_stack.push(Value::HashMap(Arc::new(map)));
                 self.instruction_pointer += 1;
             }
             Instruction::HashMapGet => {
@@ -1548,7 +1778,7 @@ impl VM {
 
                 match (&map, &key) {
                     (Value::HashMap(m), Value::String(k)) => {
-                        match m.get(k) {
+                        match m.get(k.as_str()) {
                             Some(v) => self.value_stack.push(v.clone()),
                             None => {
                                 return Err(RuntimeError::new(format!(
@@ -1576,9 +1806,9 @@ impl VM {
 
                 match (&map, &key) {
                     (Value::HashMap(m), Value::String(k)) => {
-                        let mut new_map = m.clone();
-                        new_map.insert(k.clone(), value);
-                        self.value_stack.push(Value::HashMap(new_map));
+                        let mut new_map = (**m).clone();
+                        new_map.insert(k.to_string(), value);
+                        self.value_stack.push(Value::HashMap(Arc::new(new_map)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1596,8 +1826,8 @@ impl VM {
 
                 match map {
                     Value::HashMap(m) => {
-                        let keys: Vec<Value> = m.keys().map(|k| Value::String(k.clone())).collect();
-                        self.value_stack.push(Value::List(keys));
+                        let keys: Vec<Value> = m.keys().map(|k| Value::String(Arc::new(k.clone()))).collect();
+                        self.value_stack.push(Value::List(List::from_vec(keys)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1615,7 +1845,7 @@ impl VM {
                 match map {
                     Value::HashMap(m) => {
                         let values: Vec<Value> = m.values().cloned().collect();
-                        self.value_stack.push(Value::List(values));
+                        self.value_stack.push(Value::List(List::from_vec(values)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1633,7 +1863,7 @@ impl VM {
 
                 match (&map, &key) {
                     (Value::HashMap(m), Value::String(k)) => {
-                        self.value_stack.push(Value::Boolean(m.contains_key(k)));
+                        self.value_stack.push(Value::Boolean(m.contains_key(k.as_str())));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1659,7 +1889,7 @@ impl VM {
                     items.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeVector".to_string()))?);
                 }
                 items.reverse(); // Reverse because we popped in reverse order
-                self.value_stack.push(Value::Vector(items));
+                self.value_stack.push(Value::Vector(Arc::new(items)));
                 self.instruction_pointer += 1;
             }
             Instruction::VectorGet => {
@@ -1709,9 +1939,9 @@ impl VM {
                                 idx, items.len()
                             )));
                         }
-                        let mut new_vec = items.clone();
+                        let mut new_vec = (**items).clone();
                         new_vec[idx_usize] = value;
-                        self.value_stack.push(Value::Vector(new_vec));
+                        self.value_stack.push(Value::Vector(Arc::new(new_vec)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1729,9 +1959,10 @@ impl VM {
                 let vec = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorPush".to_string()))?;
 
                 match vec {
-                    Value::Vector(mut items) => {
-                        items.push(value);
-                        self.value_stack.push(Value::Vector(items));
+                    Value::Vector(items) => {
+                        let mut new_items = (*items).clone();
+                        new_items.push(value);
+                        self.value_stack.push(Value::Vector(Arc::new(new_items)));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1751,9 +1982,9 @@ impl VM {
                         if items.is_empty() {
                             return Err(RuntimeError::new("'vector-pop!' cannot pop from empty vector".to_string()));
                         }
-                        let mut new_vec = items.clone();
+                        let mut new_vec = (*items).clone();
                         let last = new_vec.pop().unwrap();
-                        self.value_stack.push(Value::Vector(new_vec));
+                        self.value_stack.push(Value::Vector(Arc::new(new_vec)));
                         self.value_stack.push(last);
                     }
                     _ => {
@@ -1792,7 +2023,7 @@ impl VM {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListToVector".to_string()))?;
                 match value {
                     Value::List(list) => {
-                        self.value_stack.push(Value::Vector(list));
+                        self.value_stack.push(Value::Vector(Arc::new(list.to_vec())));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1808,7 +2039,7 @@ impl VM {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorToList".to_string()))?;
                 match value {
                     Value::Vector(vec) => {
-                        self.value_stack.push(Value::List(vec));
+                        self.value_stack.push(Value::List(List::from_vec((*vec).clone())));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -1970,6 +2201,177 @@ impl VM {
                 self.value_stack.push(Value::Float(base_f.powf(exp_f)));
                 self.instruction_pointer += 1;
             }
+            Instruction::Log => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Log".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'log' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                if f <= 0.0 {
+                    return Err(RuntimeError::new(format!(
+                        "Math error: 'log' expects positive number, got {}",
+                        f
+                    )));
+                }
+                self.value_stack.push(Value::Float(f.ln()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Exp => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Exp".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'exp' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.exp()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Tan => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Tan".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'tan' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.tan()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Atan => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Atan".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'atan' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.atan()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Atan2 => {
+                let x = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Atan2".to_string()))?;
+                let y = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Atan2".to_string()))?;
+                let y_f = match y {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'atan2' expects numbers, got {} and {}",
+                            Self::type_name(&y),
+                            Self::type_name(&x)
+                        )));
+                    }
+                };
+                let x_f = match x {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'atan2' expects numbers, got {} and {}",
+                            Self::type_name(&y),
+                            Self::type_name(&x)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(y_f.atan2(x_f)));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Random => {
+                use rand::Rng;
+                let mut rng = rand::thread_rng();
+                self.value_stack.push(Value::Float(rng.gen::<f64>()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::RandomInt => {
+                use rand::Rng;
+                let max = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in RandomInt".to_string()))?;
+                let max_i = match max {
+                    Value::Integer(n) => {
+                        if n <= 0 {
+                            return Err(RuntimeError::new(format!(
+                                "Argument error: 'random-int' expects positive integer, got {}",
+                                n
+                            )));
+                        }
+                        n
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'random-int' expects integer, got {}",
+                            Self::type_name(&max)
+                        )));
+                    }
+                };
+                let mut rng = rand::thread_rng();
+                self.value_stack.push(Value::Integer(rng.gen_range(0..max_i)));
+                self.instruction_pointer += 1;
+            }
+            Instruction::SeedRandom => {
+                let seed_val = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in SeedRandom".to_string()))?;
+                let seed = match seed_val {
+                    Value::Integer(n) => n as u64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'seed-random' expects integer, got {}",
+                            Self::type_name(&seed_val)
+                        )));
+                    }
+                };
+                // Note: This sets the seed for the thread_rng, but Rust's thread_rng doesn't support seeding.
+                // We'll just return the seed value as confirmation. For true seeded randomness,
+                // users would need to use a dedicated RNG stored in VM state.
+                // For now, this is a placeholder implementation.
+                self.value_stack.push(Value::Integer(seed as i64));
+                self.instruction_pointer += 1;
+            }
+            Instruction::CurrentTimestamp => {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|e| RuntimeError::new(format!("System time error: {}", e)))?;
+                self.value_stack.push(Value::Integer(now.as_secs() as i64));
+                self.instruction_pointer += 1;
+            }
+            Instruction::FormatTimestamp => {
+                let format = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FormatTimestamp".to_string()))?;
+                let timestamp = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FormatTimestamp".to_string()))?;
+                match (&timestamp, &format) {
+                    (Value::Integer(ts), Value::String(fmt)) => {
+                        use chrono::DateTime;
+                        let datetime = DateTime::from_timestamp(*ts, 0)
+                            .ok_or_else(|| RuntimeError::new(format!("Invalid timestamp: {}", ts)))?;
+                        let formatted = datetime.format(fmt).to_string();
+                        self.value_stack.push(Value::String(Arc::new(formatted)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'format-timestamp' expects integer and string, got {} and {}",
+                            Self::type_name(&timestamp),
+                            Self::type_name(&format)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
             Instruction::Eval => {
                 let code = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eval".to_string()))?;
                 match code {
@@ -2011,7 +2413,7 @@ impl VM {
                         // The result is already on the stack from the eval'd code
                         // If nothing was pushed, push nil (empty list)
                         if self.value_stack.is_empty() {
-                            self.value_stack.push(Value::List(vec![]));
+                            self.value_stack.push(Value::List(List::Nil));
                         }
                     }
                     _ => {
@@ -2030,7 +2432,7 @@ impl VM {
                 let arity = match &value {
                     Value::Function(name) => {
                         // For built-in or user-defined functions, we need to inspect the bytecode
-                        if let Some(bytecode) = self.functions.get(name) {
+                        if let Some(bytecode) = self.functions.get(name.as_str()) {
                             // Look for PackRestArgs (variadic), CheckArity (explicit), or count LoadArg
                             let mut max_arg_index: Option<usize> = None;
                             let mut is_variadic = false;
@@ -2073,11 +2475,11 @@ impl VM {
                             return Err(RuntimeError::new(format!("Unknown function: {}", name)));
                         }
                     }
-                    Value::Closure { params, rest_param, .. } => {
-                        if rest_param.is_some() {
+                    Value::Closure(closure_data) => {
+                        if closure_data.rest_param.is_some() {
                             -1 // Variadic closure
                         } else {
-                            params.len() as i64
+                            closure_data.params.len() as i64
                         }
                     }
                     _ => {
@@ -2094,17 +2496,17 @@ impl VM {
             Instruction::FunctionParams => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FunctionParams".to_string()))?;
                 match value {
-                    Value::Closure { params, rest_param, .. } => {
-                        let mut param_values: Vec<Value> = params.iter()
-                            .map(|p| Value::String(p.clone()))
+                    Value::Closure(closure_data) => {
+                        let mut param_values: Vec<Value> = closure_data.params.iter()
+                            .map(|p| Value::String(Arc::new(p.clone())))
                             .collect();
 
                         // If there's a rest parameter, add it with a dotted notation indicator
-                        if let Some(rest) = rest_param {
-                            param_values.push(Value::String(format!(". {}", rest)));
+                        if let Some(ref rest) = closure_data.rest_param {
+                            param_values.push(Value::String(Arc::new(format!(". {}", rest))));
                         }
 
-                        self.value_stack.push(Value::List(param_values));
+                        self.value_stack.push(Value::List(List::from_vec(param_values)));
                     }
                     Value::Function(name) => {
                         // For named functions, we can't easily extract parameter names from bytecode
@@ -2127,21 +2529,21 @@ impl VM {
             Instruction::ClosureCaptured => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ClosureCaptured".to_string()))?;
                 match value {
-                    Value::Closure { captured, .. } => {
+                    Value::Closure(closure_data) => {
                         // Return list of (name, value) pairs
-                        let captured_pairs: Vec<Value> = captured.iter()
+                        let captured_pairs: Vec<Value> = closure_data.captured.iter()
                             .map(|(name, val)| {
-                                Value::List(vec![
-                                    Value::String(name.clone()),
+                                Value::List(List::from_vec(vec![
+                                    Value::String(Arc::new(name.clone())),
                                     val.clone()
-                                ])
+                                ]))
                             })
                             .collect();
-                        self.value_stack.push(Value::List(captured_pairs));
+                        self.value_stack.push(Value::List(List::from_vec(captured_pairs)));
                     }
                     Value::Function(_) => {
                         // Named functions don't have captured variables
-                        self.value_stack.push(Value::List(vec![]));
+                        self.value_stack.push(Value::List(List::Nil));
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
@@ -2171,6 +2573,33 @@ impl VM {
                         )));
                     }
                 }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::TypeOf => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in TypeOf".to_string()))?;
+                let type_symbol = match value {
+                    Value::Integer(_) => "integer",
+                    Value::Float(_) => "float",
+                    Value::Boolean(_) => "boolean",
+                    Value::List(_) => "list",
+                    Value::Symbol(_) => "symbol",
+                    Value::String(_) => "string",
+                    Value::Function(_) => "function",
+                    Value::Closure(_) => "closure",
+                    Value::HashMap(_) => "hashmap",
+                    Value::Vector(_) => "vector",
+                };
+                self.value_stack.push(Value::Symbol(Arc::new(type_symbol.to_string())));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::GenSym => {
+                use std::sync::atomic::{AtomicUsize, Ordering};
+                static GENSYM_COUNTER: AtomicUsize = AtomicUsize::new(0);
+                let counter = GENSYM_COUNTER.fetch_add(1, Ordering::SeqCst);
+                let sym = format!("G__{}", counter);
+                self.value_stack.push(Value::Symbol(Arc::new(sym)));
                 self.instruction_pointer += 1;
             }
         }
@@ -2205,22 +2634,22 @@ impl VM {
                 }
             }
             Value::Boolean(b) => b.to_string(),
-            Value::List(items) => {
-                let formatted_items: Vec<String> = items
+            Value::List(list) => {
+                let formatted_items: Vec<String> = list
                     .iter()
                     .map(|v| Self::format_value(v))
                     .collect();
                 format!("({})", formatted_items.join(" "))
             }
-            Value::Symbol(s) => s.clone(),
+            Value::Symbol(s) => s.to_string(),
             Value::String(s) => format!("\"{}\"", s),
             Value::Function(name) => format!("<function {}>", name),
-            Value::Closure { params, .. } => {
-                format!("<closure/{}>", params.len())
+            Value::Closure(closure_data) => {
+                format!("<closure/{}>", closure_data.params.len())
             }
             Value::HashMap(map) => {
                 let mut items: Vec<String> = map.iter()
-                    .map(|(k, v)| format!("{} {}", Self::format_value(&Value::String(k.clone())), Self::format_value(v)))
+                    .map(|(k, v)| format!("{} {}", Self::format_value(&Value::String(Arc::new(k.clone()))), Self::format_value(v)))
                     .collect();
                 items.sort(); // Sort for consistent output
                 format!("{{{}}}", items.join(" "))

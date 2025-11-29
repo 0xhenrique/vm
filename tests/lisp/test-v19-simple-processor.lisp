@@ -1,5 +1,5 @@
 ;; SKIP
-;; Reason: Requires pattern matching in function parameters (Phase 8)
+;; Reason: 'read-file' failed to read 'tests/test-v18-cons-patterns.lisp': No such file or directory (os error 2)
 ; Demonstration: Simple source code processor using file I/O
 ; This shows we're on the path to self-hosting!
 

@@ -83,6 +83,9 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::SymbolToString => "SymbolToString".to_string(),
         Instruction::StringToSymbol => "StringToSymbol".to_string(),
         Instruction::GetLocal(pos) => format!("GetLocal({})", pos),
+        Instruction::SetLocal(pos) => format!("SetLocal({})", pos),
+        Instruction::BeginLoop(count) => format!("BeginLoop({})", count),
+        Instruction::Recur(count) => format!("Recur({})", count),
         Instruction::PopN(n) => format!("PopN({})", n),
         Instruction::Slide(n) => format!("Slide({})", n),
         Instruction::CheckArity(arity, addr) => format!("CheckArity({}, {})", arity, addr),
@@ -153,10 +156,26 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::Sqrt => "Sqrt".to_string(),
         Instruction::Sin => "Sin".to_string(),
         Instruction::Cos => "Cos".to_string(),
+        Instruction::Tan => "Tan".to_string(),
+        Instruction::Atan => "Atan".to_string(),
+        Instruction::Atan2 => "Atan2".to_string(),
+        Instruction::Log => "Log".to_string(),
+        Instruction::Exp => "Exp".to_string(),
         Instruction::Floor => "Floor".to_string(),
         Instruction::Ceil => "Ceil".to_string(),
         Instruction::Abs => "Abs".to_string(),
         Instruction::Pow => "Pow".to_string(),
+        Instruction::Random => "Random".to_string(),
+        Instruction::RandomInt => "RandomInt".to_string(),
+        Instruction::SeedRandom => "SeedRandom".to_string(),
+        // String operations
+        Instruction::StringSplit => "StringSplit".to_string(),
+        Instruction::StringJoin => "StringJoin".to_string(),
+        Instruction::StringTrim => "StringTrim".to_string(),
+        Instruction::StringReplace => "StringReplace".to_string(),
+        // Date/Time operations
+        Instruction::CurrentTimestamp => "CurrentTimestamp".to_string(),
+        Instruction::FormatTimestamp => "FormatTimestamp".to_string(),
         // Metaprogramming
         Instruction::Eval => "Eval".to_string(),
         // Reflection
@@ -164,6 +183,9 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::FunctionParams => "FunctionParams".to_string(),
         Instruction::ClosureCaptured => "ClosureCaptured".to_string(),
         Instruction::FunctionName => "FunctionName".to_string(),
+        // Type inspection and symbol generation
+        Instruction::TypeOf => "TypeOf".to_string(),
+        Instruction::GenSym => "GenSym".to_string(),
     }
 }
 

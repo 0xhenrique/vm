@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::vm::value::Value;
+use crate::vm::value::{Value, List};
 use crate::vm::instructions::Instruction;
 use crate::vm::errors::{CompileError, Location};
 use crate::vm::vm::VM;
@@ -61,6 +62,25 @@ struct ParsedParams {
     rest: Option<String>,
 }
 
+// Pattern type for pattern matching in function definitions
+#[derive(Debug, Clone)]
+enum Pattern {
+    Variable(String),           // Matches anything, binds to name
+    Wildcard,                   // Matches anything, no binding
+    Literal(Value),             // Matches specific value (number, boolean)
+    QuotedSymbol(String),       // Matches quoted symbol: 'foo
+    EmptyList,                  // Matches empty list: '()
+    List(Vec<Pattern>),         // Matches fixed-length list: (a b c)
+    DottedList(Vec<Pattern>, Box<Pattern>), // Matches cons pattern: (h . t)
+}
+
+// A single clause in a multi-clause function definition
+#[derive(Debug)]
+struct FunctionClause {
+    patterns: Vec<Pattern>,     // Patterns for each argument
+    body: SourceExpr,           // Body to execute if patterns match
+}
+
 pub struct Compiler {
     bytecode: Vec<Instruction>,
     pub functions: HashMap<String, Vec<Instruction>>,
@@ -74,6 +94,7 @@ pub struct Compiler {
     local_bindings: HashMap<String, ValueLocation>, // Track let-bound variables
     stack_depth: usize, // Track current stack depth for let bindings
     in_tail_position: bool, // Track if current expression is in tail position (for TCO)
+    pattern_match_jumps: Vec<usize>, // Temporary storage for pattern match jump indices
 }
 
 impl Compiler {
@@ -92,6 +113,7 @@ impl Compiler {
             local_bindings: HashMap::new(),
             stack_depth: 0,
             in_tail_position: false,
+            pattern_match_jumps: Vec::new(),
         }
     }
 
@@ -117,6 +139,11 @@ impl Compiler {
         }
     }
 
+    // Clear main bytecode (used after loading stdlib to avoid accumulating bytecode)
+    pub fn clear_main_bytecode(&mut self) {
+        self.bytecode.clear();
+        self.instruction_address = 0;
+    }
 
     fn emit(&mut self, instruction: Instruction) {
         self.bytecode.push(instruction);
@@ -153,7 +180,7 @@ impl Compiler {
                 // Check if it's a string literal (hack from parser)
                 if s.starts_with("__STRING__") {
                     let string_content = s["__STRING__".len()..].to_string();
-                    self.emit(Instruction::Push(Value::String(string_content)));
+                    self.emit(Instruction::Push(Value::String(Arc::new(string_content))));
                 } else {
                     // Check local bindings first (let bindings)
                     if let Some(location) = self.local_bindings.get(s) {
@@ -172,7 +199,7 @@ impl Compiler {
                     } else if self.functions.contains_key(s) || self.known_functions.contains(s) || Self::is_builtin_function(s) {
                         // Check if this is a function name (user-defined, known from context, or builtin)
                         // Push it as a Function value so it can be passed around
-                        self.emit(Instruction::Push(Value::Function(s.clone())));
+                        self.emit(Instruction::Push(Value::Function(Arc::new(s.clone()))));
                     } else {
                         return Err(CompileError::new(
                             format!("Undefined variable '{}'", s),
@@ -574,6 +601,33 @@ impl Compiler {
                         self.in_tail_position = saved_tail;
                     }
 
+                    // Do/Begin: (do expr1 expr2 ... exprN) or (begin expr1 expr2 ... exprN)
+                    // Sequences side effects - evaluates all expressions, returns last value
+                    "do" | "begin" => {
+                        if items.len() < 2 {
+                            return Err(CompileError::new(
+                                "do/begin expects at least 1 expression".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        let saved_tail = self.in_tail_position;
+
+                        // Compile all expressions except the last
+                        for expr in &items[1..items.len()-1] {
+                            self.in_tail_position = false;
+                            self.compile_expr(expr)?;
+                            // Pop the result since we don't need it (side effects only)
+                            self.emit(Instruction::PopN(1));
+                        }
+
+                        // Compile the last expression (inherits tail position)
+                        self.in_tail_position = saved_tail;
+                        self.compile_expr(&items[items.len()-1])?;
+
+                        self.in_tail_position = saved_tail;
+                    }
+
                     // Print: (print expr)
                     "print" => {
                         if items.len() != 2 {
@@ -597,6 +651,70 @@ impl Compiler {
                         // Convert the quoted expression to a runtime Value
                         let value = self.expr_to_value(&items[1])?;
                         self.emit(Instruction::Push(value));
+                    }
+
+                    // Macroexpand: (macroexpand '(macro-call ...)) - expand macro once
+                    "macroexpand" => {
+                        if items.len() != 2 {
+                            return Err(CompileError::new(
+                                "macroexpand expects exactly 1 argument".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        // Extract the form to expand (handling quoted forms)
+                        let form_to_expand = &items[1];
+                        let actual_form = if let LispExpr::List(quoted_items) = &form_to_expand.expr {
+                            // Check if it's a quoted form: (quote expr)
+                            if quoted_items.len() == 2 {
+                                if let LispExpr::Symbol(s) = &quoted_items[0].expr {
+                                    if s == "quote" {
+                                        // Extract the quoted expression
+                                        &quoted_items[1]
+                                    } else {
+                                        form_to_expand
+                                    }
+                                } else {
+                                    form_to_expand
+                                }
+                            } else {
+                                form_to_expand
+                            }
+                        } else {
+                            form_to_expand
+                        };
+
+                        // Now check if actual_form is a macro call
+                        if let LispExpr::List(form_items) = &actual_form.expr {
+                            if let Some(first) = form_items.first() {
+                                if let LispExpr::Symbol(name) = &first.expr {
+                                    if let Some(macro_def) = self.macros.get(name).cloned() {
+                                        // It's a macro - expand it
+                                        let args = &form_items[1..];
+                                        let expanded = self.expand_macro(&macro_def, args)?;
+                                        // Return the expanded form as a value
+                                        let value = self.expr_to_value(&expanded)?;
+                                        self.emit(Instruction::Push(value));
+                                    } else {
+                                        // Not a macro - return the original form
+                                        let value = self.expr_to_value(actual_form)?;
+                                        self.emit(Instruction::Push(value));
+                                    }
+                                } else {
+                                    // First element is not a symbol - return as is
+                                    let value = self.expr_to_value(actual_form)?;
+                                    self.emit(Instruction::Push(value));
+                                }
+                            } else {
+                                // Empty list - return as is
+                                let value = self.expr_to_value(actual_form)?;
+                                self.emit(Instruction::Push(value));
+                            }
+                        } else {
+                            // Not a list - return as is
+                            let value = self.expr_to_value(actual_form)?;
+                            self.emit(Instruction::Push(value));
+                        }
                     }
 
                     "list" => {
@@ -654,6 +772,30 @@ impl Compiler {
                         }
 
                         self.compile_let(&items[1], &items[2])?;
+                    }
+
+                    // Loop: (loop [bindings] body)
+                    "loop" => {
+                        if items.len() != 3 {
+                            return Err(CompileError::new(
+                                "loop expects exactly 2 arguments: bindings and body".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        self.compile_loop(&items[1], &items[2])?;
+                    }
+
+                    // Recur: (recur new-values...)
+                    "recur" => {
+                        if items.len() < 1 {
+                            return Err(CompileError::new(
+                                "recur expects at least 0 arguments".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        self.compile_recur(&items[1..])?;
                     }
 
                     // Lambda: (lambda (params) body)
@@ -1067,27 +1209,26 @@ impl Compiler {
             LispExpr::Boolean(b) => Ok(Value::Boolean(*b)),
             LispExpr::Symbol(s) => {
                 // Symbols in quoted expressions become Symbol values
-                Ok(Value::Symbol(s.clone()))
+                Ok(Value::Symbol(Arc::new(s.clone())))
             }
             LispExpr::List(items) => {
                 let mut values = Vec::new();
                 for item in items {
                     values.push(self.expr_to_value(item)?);
                 }
-                Ok(Value::List(values))
+                Ok(Value::List(List::from_vec(values)))
             }
             LispExpr::DottedList(items, rest) => {
                 // '(a b . rest) - cons a and b onto rest
                 let rest_value = self.expr_to_value(rest)?;
 
                 // Rest must be a list
-                if let Value::List(mut rest_list) = rest_value {
-                    // Prepend items to rest_list
-                    let mut result = Vec::new();
-                    for item in items {
-                        result.push(self.expr_to_value(item)?);
+                if let Value::List(rest_list) = rest_value {
+                    // Prepend items to rest_list (from back to front)
+                    let mut result = rest_list;
+                    for item in items.iter().rev() {
+                        result = List::cons(self.expr_to_value(item)?, result);
                     }
-                    result.append(&mut rest_list);
                     Ok(Value::List(result))
                 } else {
                     Err(CompileError::new(
@@ -1152,7 +1293,7 @@ impl Compiler {
         Ok(())
     }
 
-        fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
+    fn compile_defun(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
         let items = match &expr.expr {
             LispExpr::List(items) => items,
             _ => {
@@ -1193,16 +1334,46 @@ impl Compiler {
             }
         };
 
-        // Simple defun: (defun name (params) body)
-        // Supports both regular and variadic parameters: (a b) or (a b . rest)
-        if items.len() != 4 {
-            return Err(CompileError::new(
-                "defun requires exactly 4 elements: (defun name (params) body)".to_string(),
-                items[0].location.clone(),
-            ));
-        }
+        // Determine if this is a multi-clause or single-clause defun
+        // Multi-clause: (defun name ((pattern) body) ((pattern) body) ...)
+        // Single-clause: (defun name (params) body)
+        //
+        // Heuristic: if items.len() == 4 and items[2] is a list/dotted-list that looks
+        // like parameters (only contains symbols), it's single-clause.
+        // Otherwise, if items[2] looks like a clause (a list starting with a list), it's multi-clause.
 
-        self.compile_single_clause_defun(&fn_name, &items[2], &items[3])
+        if items.len() == 4 && self.looks_like_param_list(&items[2]) {
+            // Single-clause defun: (defun name (params) body)
+            self.compile_single_clause_defun(&fn_name, &items[2], &items[3])
+        } else {
+            // Multi-clause defun: (defun name clause1 clause2 ...)
+            let clauses = &items[2..];
+            self.compile_multi_clause_defun(&fn_name, clauses, &items[0].location)
+        }
+    }
+
+    // Check if an expression looks like a parameter list (only contains symbols)
+    fn looks_like_param_list(&self, expr: &SourceExpr) -> bool {
+        match &expr.expr {
+            LispExpr::List(params) => {
+                // Check for special case (. rest) - this is a valid param list
+                if params.len() == 2 {
+                    if let LispExpr::Symbol(s) = &params[0].expr {
+                        if s == "." {
+                            return true;
+                        }
+                    }
+                }
+                // Regular param list: all symbols
+                params.iter().all(|p| matches!(&p.expr, LispExpr::Symbol(_)))
+            }
+            LispExpr::DottedList(head, tail) => {
+                // Dotted list: (a b . rest) - all should be symbols
+                head.iter().all(|p| matches!(&p.expr, LispExpr::Symbol(_)))
+                    && matches!(&tail.expr, LispExpr::Symbol(_))
+            }
+            _ => false,
+        }
     }
 
     // Parse parameter list, detecting variadic syntax (a b . rest)
@@ -1340,6 +1511,590 @@ impl Compiler {
         Ok(())
     }
 
+// ==================== PATTERN MATCHING FOR DEFUN ====================
+
+    // Compile multi-clause defun with pattern matching
+    fn compile_multi_clause_defun(
+        &mut self,
+        fn_name: &str,
+        clauses: &[SourceExpr],
+        location: &Location,
+    ) -> Result<(), CompileError> {
+        // Parse all clauses first to validate them
+        let parsed_clauses: Vec<FunctionClause> = clauses
+            .iter()
+            .map(|c| self.parse_clause(c))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if parsed_clauses.is_empty() {
+            return Err(CompileError::new(
+                "defun requires at least one clause".to_string(),
+                location.clone(),
+            ));
+        }
+
+        // Validate that all clauses have the same arity (for now)
+        // In the future, we could support different arities with dispatch
+        let arity = parsed_clauses[0].patterns.len();
+        for (i, clause) in parsed_clauses.iter().enumerate() {
+            if clause.patterns.len() != arity {
+                return Err(CompileError::new(
+                    format!(
+                        "Clause {} has {} patterns, but clause 1 has {} patterns. All clauses must have the same arity.",
+                        i + 1, clause.patterns.len(), arity
+                    ),
+                    clauses[i].location.clone(),
+                ));
+            }
+        }
+
+        // Collect variable names from all patterns to build param_names
+        // For pattern matching, we use synthetic parameter names based on position
+        let param_names: Vec<String> = (0..arity).map(|i| format!("__arg{}", i)).collect();
+
+        // Save current compilation context
+        let saved_bytecode = std::mem::take(&mut self.bytecode);
+        let saved_params = std::mem::take(&mut self.param_names);
+        let saved_address = self.instruction_address;
+        let saved_tail_position = self.in_tail_position;
+        let saved_local_bindings = std::mem::take(&mut self.local_bindings);
+        let saved_stack_depth = self.stack_depth;
+
+        // Set up new context for function
+        self.bytecode = Vec::new();
+        self.param_names = param_names;
+        self.instruction_address = 0;
+        self.stack_depth = 0;
+
+        // Compile pattern matching dispatch
+        // Structure:
+        // clause_0:
+        //   <pattern checks for clause 0>
+        //   JmpIfFalse(clause_1)
+        //   <bind variables for clause 0>
+        //   <body for clause 0>
+        //   Ret
+        // clause_1:
+        //   <pattern checks for clause 1>
+        //   JmpIfFalse(clause_2)
+        //   ...
+        // no_match:
+        //   <error: no matching clause>
+
+        let num_clauses = parsed_clauses.len();
+        let mut clause_addresses: Vec<usize> = Vec::with_capacity(num_clauses + 1);
+
+        for (clause_idx, clause) in parsed_clauses.iter().enumerate() {
+            clause_addresses.push(self.instruction_address);
+
+            // Save bindings for this clause
+            self.local_bindings.clear();
+            self.stack_depth = 0;
+
+            // Compile pattern checks for this clause
+            // If any pattern fails, jump to next clause
+            self.pattern_match_jumps.clear();
+            let _jump_count = self.compile_pattern_checks(&clause.patterns, arity)?;
+
+            // Save the jump indices to patch later
+            let jumps_to_patch: Vec<usize> = self.pattern_match_jumps.clone();
+
+            // All patterns matched! Bind variables from patterns
+            self.bind_pattern_variables(&clause.patterns, arity)?;
+
+            // Compile the body in tail position
+            self.in_tail_position = true;
+            self.compile_expr(&clause.body)?;
+
+            // Clean up any stack values from pattern bindings
+            if self.stack_depth > 0 {
+                self.emit(Instruction::Slide(self.stack_depth));
+            }
+
+            // Return
+            self.emit(Instruction::Ret);
+
+            // Patch all jump addresses to point to the next clause (or error)
+            let target = self.instruction_address;
+            for jump_idx in jumps_to_patch {
+                self.patch_jump(jump_idx, target);
+            }
+
+            // If this is the last clause, emit error handler
+            if clause_idx == num_clauses - 1 {
+                // Emit error for no matching clause
+                self.emit(Instruction::Push(Value::String(Arc::new(
+                    format!("No matching clause in function '{}'", fn_name)
+                ))));
+                self.emit(Instruction::Print);
+                self.emit(Instruction::Halt);
+            }
+        }
+
+        // Store compiled function
+        let fn_bytecode = std::mem::take(&mut self.bytecode);
+        self.functions.insert(fn_name.to_string(), fn_bytecode);
+
+        // Restore context
+        self.bytecode = saved_bytecode;
+        self.param_names = saved_params;
+        self.instruction_address = saved_address;
+        self.in_tail_position = saved_tail_position;
+        self.local_bindings = saved_local_bindings;
+        self.stack_depth = saved_stack_depth;
+
+        Ok(())
+    }
+
+    // Compile pattern checks for all patterns in a clause
+    // Returns the number of patterns checked
+    fn compile_pattern_checks(&mut self, patterns: &[Pattern], _arity: usize) -> Result<usize, CompileError> {
+        // For each pattern, generate check code
+        // If any check fails, jump to the next clause
+        // We'll collect all jump addresses and patch them to point to the same target
+
+        for (arg_idx, pattern) in patterns.iter().enumerate() {
+            // Compile check for this argument's pattern
+            // This will emit JmpIfFalse instructions for failures
+            self.compile_pattern_check_for_arg(pattern, arg_idx)?;
+        }
+
+        Ok(patterns.len())
+    }
+
+    // Compile check for a pattern against a specific argument
+    // Emits JmpIfFalse for failure conditions, which get collected in pattern_match_jumps
+    fn compile_pattern_check_for_arg(&mut self, pattern: &Pattern, arg_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(_) | Pattern::Wildcard => {
+                // Always matches - no check needed
+            }
+            Pattern::Literal(value) => {
+                // Load argument and check equality
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::Push(value.clone()));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::QuotedSymbol(s) => {
+                // Load argument and check equality with symbol
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::Push(Value::Symbol(Arc::new(s.clone()))));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::EmptyList => {
+                // Load argument and check equality with empty list
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::Push(Value::List(List::Nil)));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::List(sub_patterns) => {
+                // Check if it's a list with the right length
+                // 1. Check it's a list
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::IsList);
+                let not_list_jump = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(not_list_jump);
+
+                // 2. Check length
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::ListLength);
+                self.emit(Instruction::Push(Value::Integer(sub_patterns.len() as i64)));
+                self.emit(Instruction::Eq);
+                let wrong_len_jump = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(wrong_len_jump);
+
+                // 3. Check each element
+                for (elem_idx, sub_pattern) in sub_patterns.iter().enumerate() {
+                    self.compile_pattern_check_for_list_element(sub_pattern, arg_idx, elem_idx)?;
+                }
+            }
+            Pattern::DottedList(head_patterns, tail_pattern) => {
+                // Check if it's a list with at least head_patterns.len() elements
+                // 1. Check it's a list
+                self.emit(Instruction::LoadArg(arg_idx));
+                self.emit(Instruction::IsList);
+                let not_list_jump = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(not_list_jump);
+
+                // 2. Check length is at least head_patterns.len()
+                if !head_patterns.is_empty() {
+                    self.emit(Instruction::LoadArg(arg_idx));
+                    self.emit(Instruction::ListLength);
+                    self.emit(Instruction::Push(Value::Integer(head_patterns.len() as i64)));
+                    self.emit(Instruction::Gte); // length >= required
+                    let too_short_jump = self.instruction_address;
+                    self.emit(Instruction::JmpIfFalse(0));
+                    self.pattern_match_jumps.push(too_short_jump);
+                }
+
+                // 3. Check each head element
+                for (elem_idx, sub_pattern) in head_patterns.iter().enumerate() {
+                    self.compile_pattern_check_for_list_element(sub_pattern, arg_idx, elem_idx)?;
+                }
+
+                // 4. Check the tail pattern (rest of the list)
+                self.compile_pattern_check_for_list_tail(tail_pattern, arg_idx, head_patterns.len())?;
+            }
+        }
+        Ok(())
+    }
+
+    // Compile check for a pattern against a list element
+    fn compile_pattern_check_for_list_element(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(_) | Pattern::Wildcard => {
+                // Always matches - no check needed
+            }
+            Pattern::Literal(value) => {
+                // Load element and check equality
+                self.emit(Instruction::LoadArg(arg_idx));
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                self.emit(Instruction::Push(value.clone()));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::QuotedSymbol(s) => {
+                self.emit(Instruction::LoadArg(arg_idx));
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                self.emit(Instruction::Push(Value::Symbol(Arc::new(s.clone()))));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::EmptyList => {
+                self.emit(Instruction::LoadArg(arg_idx));
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                self.emit(Instruction::Push(Value::List(List::Nil)));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            Pattern::List(_) | Pattern::DottedList(_, _) => {
+                // Nested complex patterns - would need recursive handling
+                // For now, skip the check (will always succeed structurally)
+                // The binding phase will still extract the values
+            }
+        }
+        Ok(())
+    }
+
+    // Compile check for a pattern against a list tail (rest after skipping elements)
+    fn compile_pattern_check_for_list_tail(&mut self, pattern: &Pattern, arg_idx: usize, skip_count: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(_) | Pattern::Wildcard => {
+                // Always matches - no check needed
+            }
+            Pattern::EmptyList => {
+                // Check that the rest is empty
+                self.emit(Instruction::LoadArg(arg_idx));
+                for _ in 0..skip_count {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Push(Value::List(List::Nil)));
+                self.emit(Instruction::Eq);
+                let jump_idx = self.instruction_address;
+                self.emit(Instruction::JmpIfFalse(0));
+                self.pattern_match_jumps.push(jump_idx);
+            }
+            _ => {
+                // Other patterns as tail - skip for now
+            }
+        }
+        Ok(())
+    }
+
+    // Patch a JmpIfFalse instruction with the correct target address
+    fn patch_jump(&mut self, idx: usize, target: usize) {
+        match &mut self.bytecode[idx] {
+            Instruction::JmpIfFalse(addr) => *addr = target,
+            Instruction::Jmp(addr) => *addr = target,
+            _ => panic!("Expected jump instruction at index {}", idx),
+        }
+    }
+
+    // Bind variables from patterns to their locations
+    fn bind_pattern_variables(&mut self, patterns: &[Pattern], _arity: usize) -> Result<(), CompileError> {
+        for (arg_idx, pattern) in patterns.iter().enumerate() {
+            self.bind_pattern_variable(pattern, arg_idx)?;
+        }
+        Ok(())
+    }
+
+    // Bind variables from a single pattern
+    fn bind_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Bind variable to argument position
+                // We'll track this in param_names and use LoadArg
+                // Actually, param_names is for positional params
+                // For pattern variables, we need to use local_bindings
+
+                // Load the argument onto the stack and bind the variable to that stack position
+                self.emit(Instruction::LoadArg(arg_idx));
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::QuotedSymbol(_) | Pattern::EmptyList => {
+                // No binding needed
+            }
+            Pattern::List(sub_patterns) => {
+                // Bind sub-pattern variables
+                // Each sub-pattern corresponds to an element of the list
+                for (elem_idx, sub_pattern) in sub_patterns.iter().enumerate() {
+                    self.bind_nested_pattern_variable(sub_pattern, arg_idx, elem_idx)?;
+                }
+            }
+            Pattern::DottedList(head_patterns, tail_pattern) => {
+                // Bind head pattern variables
+                for (elem_idx, sub_pattern) in head_patterns.iter().enumerate() {
+                    self.bind_nested_pattern_variable(sub_pattern, arg_idx, elem_idx)?;
+                }
+                // Bind tail pattern variable
+                self.bind_tail_pattern_variable(tail_pattern, arg_idx, head_patterns.len())?;
+            }
+        }
+        Ok(())
+    }
+
+    // Bind a variable from a nested pattern (element of a list)
+    fn bind_nested_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument, extract the element, and bind
+                self.emit(Instruction::LoadArg(arg_idx));
+                // Navigate to element using cdr/car
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::QuotedSymbol(_) | Pattern::EmptyList => {
+                // No binding needed
+            }
+            Pattern::List(_) | Pattern::DottedList(_, _) => {
+                // Nested patterns within lists - would need recursive handling
+                // For now, just skip (no bindings)
+            }
+        }
+        Ok(())
+    }
+
+    // Bind the tail of a dotted list pattern
+    fn bind_tail_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, skip_count: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument, skip elements, bind the rest
+                self.emit(Instruction::LoadArg(arg_idx));
+                for _ in 0..skip_count {
+                    self.emit(Instruction::Cdr);
+                }
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::EmptyList => {
+                // No binding needed
+            }
+            _ => {
+                // Other patterns as tail - complex case, skip for now
+            }
+        }
+        Ok(())
+    }
+
+    // Parse a clause: ((pattern1 pattern2 ...) body)
+    fn parse_clause(&self, expr: &SourceExpr) -> Result<FunctionClause, CompileError> {
+        let items = match &expr.expr {
+            LispExpr::List(items) => items,
+            _ => {
+                return Err(CompileError::new(
+                    "Clause must be a list: ((patterns...) body)".to_string(),
+                    expr.location.clone(),
+                ));
+            }
+        };
+
+        if items.len() != 2 {
+            return Err(CompileError::new(
+                "Clause must have exactly 2 elements: ((patterns...) body)".to_string(),
+                expr.location.clone(),
+            ));
+        }
+
+        // Parse patterns from first element
+        let patterns = self.parse_patterns(&items[0])?;
+        let body = items[1].clone();
+
+        Ok(FunctionClause { patterns, body })
+    }
+
+    // Parse patterns list: (pattern1 pattern2 ...)
+    fn parse_patterns(&self, expr: &SourceExpr) -> Result<Vec<Pattern>, CompileError> {
+        match &expr.expr {
+            LispExpr::List(items) => {
+                items.iter().map(|p| self.parse_pattern(p)).collect()
+            }
+            LispExpr::DottedList(head, tail) => {
+                // Dotted list like (a b . rest) - parse head patterns and tail as rest pattern
+                let patterns: Vec<Pattern> = head.iter().map(|p| self.parse_pattern(p)).collect::<Result<Vec<_>, _>>()?;
+                let rest_pattern = self.parse_pattern(tail)?;
+                // This represents a variadic clause - we need to handle this specially
+                // For now, we'll create a DottedList pattern for the whole thing
+                if patterns.is_empty() {
+                    // (. rest) - just a rest parameter
+                    Ok(vec![rest_pattern])
+                } else {
+                    // (a b . rest) - this is tricky. For now, disallow in multi-clause
+                    Err(CompileError::new(
+                        "Variadic patterns (a b . rest) not yet supported in multi-clause defun. Use single-clause defun with variadic parameters.".to_string(),
+                        expr.location.clone(),
+                    ))
+                }
+            }
+            _ => {
+                Err(CompileError::new(
+                    "Patterns must be a list".to_string(),
+                    expr.location.clone(),
+                ))
+            }
+        }
+    }
+
+    // Parse a single pattern
+    fn parse_pattern(&self, expr: &SourceExpr) -> Result<Pattern, CompileError> {
+        match &expr.expr {
+            // Simple symbol: variable or wildcard
+            LispExpr::Symbol(s) => {
+                if s == "_" {
+                    Ok(Pattern::Wildcard)
+                } else {
+                    Ok(Pattern::Variable(s.clone()))
+                }
+            }
+            // Number literal
+            LispExpr::Number(n) => {
+                Ok(Pattern::Literal(Value::Integer(*n)))
+            }
+            // Float literal
+            LispExpr::Float(f) => {
+                Ok(Pattern::Literal(Value::Float(*f)))
+            }
+            // Boolean literal
+            LispExpr::Boolean(b) => {
+                Ok(Pattern::Literal(Value::Boolean(*b)))
+            }
+            // List pattern: could be a list pattern or quoted expression
+            LispExpr::List(items) => {
+                // Check for quote: '() or 'symbol
+                if items.len() == 2 {
+                    if let LispExpr::Symbol(s) = &items[0].expr {
+                        if s == "quote" {
+                            return self.parse_quoted_pattern(&items[1]);
+                        }
+                    }
+                }
+                // Regular list pattern: (a b c)
+                let sub_patterns: Vec<Pattern> = items
+                    .iter()
+                    .map(|p| self.parse_pattern(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Pattern::List(sub_patterns))
+            }
+            // Dotted list pattern: (h . t)
+            LispExpr::DottedList(head, tail) => {
+                let head_patterns: Vec<Pattern> = head
+                    .iter()
+                    .map(|p| self.parse_pattern(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let tail_pattern = self.parse_pattern(tail)?;
+                Ok(Pattern::DottedList(head_patterns, Box::new(tail_pattern)))
+            }
+        }
+    }
+
+    // Parse a quoted pattern: 'symbol or '()
+    fn parse_quoted_pattern(&self, expr: &SourceExpr) -> Result<Pattern, CompileError> {
+        match &expr.expr {
+            // 'symbol - quoted symbol
+            LispExpr::Symbol(s) => {
+                Ok(Pattern::QuotedSymbol(s.clone()))
+            }
+            // '() - empty list
+            LispExpr::List(items) if items.is_empty() => {
+                Ok(Pattern::EmptyList)
+            }
+            // '(1 2 3) - quoted list (treat as literal list pattern)
+            LispExpr::List(items) => {
+                let sub_patterns: Vec<Pattern> = items
+                    .iter()
+                    .map(|p| self.parse_quoted_list_element(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Pattern::List(sub_patterns))
+            }
+            _ => {
+                Err(CompileError::new(
+                    format!("Unsupported quoted pattern: {:?}", expr.expr),
+                    expr.location.clone(),
+                ))
+            }
+        }
+    }
+
+    // Parse elements within a quoted list (they're all literals)
+    fn parse_quoted_list_element(&self, expr: &SourceExpr) -> Result<Pattern, CompileError> {
+        match &expr.expr {
+            LispExpr::Symbol(s) => Ok(Pattern::QuotedSymbol(s.clone())),
+            LispExpr::Number(n) => Ok(Pattern::Literal(Value::Integer(*n))),
+            LispExpr::Float(f) => Ok(Pattern::Literal(Value::Float(*f))),
+            LispExpr::Boolean(b) => Ok(Pattern::Literal(Value::Boolean(*b))),
+            LispExpr::List(items) if items.is_empty() => Ok(Pattern::EmptyList),
+            LispExpr::List(items) => {
+                let sub_patterns: Vec<Pattern> = items
+                    .iter()
+                    .map(|p| self.parse_quoted_list_element(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Pattern::List(sub_patterns))
+            }
+            LispExpr::DottedList(head, tail) => {
+                let head_patterns: Vec<Pattern> = head
+                    .iter()
+                    .map(|p| self.parse_quoted_list_element(p))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let tail_pattern = self.parse_quoted_list_element(tail)?;
+                Ok(Pattern::DottedList(head_patterns, Box::new(tail_pattern)))
+            }
+        }
+    }
+
 // ==================== SPECIAL FORMS (LET, COND, AND, OR) ====================
 
     // Compile let expression: (let ((pattern value) ...) body)
@@ -1419,12 +2174,122 @@ impl Compiler {
         // Restore binding context
         self.local_bindings = saved_bindings;
 
-// ==================== MACRO SYSTEM ====================
-
         self.stack_depth = saved_stack_depth;
 
         Ok(())
     }
+
+    fn compile_loop(
+        &mut self,
+        bindings_expr: &SourceExpr,
+        body_expr: &SourceExpr,
+    ) -> Result<(), CompileError> {
+        // Parse bindings list (similar to let)
+        let bindings = match &bindings_expr.expr {
+            LispExpr::List(b) => b,
+            _ => {
+                return Err(CompileError::new(
+                    "loop bindings must be a list".to_string(),
+                    bindings_expr.location.clone(),
+                ));
+            }
+        };
+
+        // Save current local bindings and stack depth
+        let saved_bindings = self.local_bindings.clone();
+        let saved_stack_depth = self.stack_depth;
+
+        let mut num_bindings = 0;
+        let mut binding_names = Vec::new();
+
+        // Process each binding
+        for binding in bindings {
+            let binding_pair = match &binding.expr {
+                LispExpr::List(pair) => pair,
+                _ => {
+                    return Err(CompileError::new(
+                        "Each binding must be a list (name value)".to_string(),
+                        binding.location.clone(),
+                    ));
+                }
+            };
+
+            if binding_pair.len() != 2 {
+                return Err(CompileError::new(
+                    "Each binding must have exactly 2 elements: (name value)".to_string(),
+                    binding.location.clone(),
+                ));
+            }
+
+            let name_expr = &binding_pair[0];
+            let value_expr = &binding_pair[1];
+
+            // Get binding name (must be a symbol)
+            let name = match &name_expr.expr {
+                LispExpr::Symbol(s) => s.clone(),
+                _ => {
+                    return Err(CompileError::new(
+                        "loop binding name must be a symbol".to_string(),
+                        name_expr.location.clone(),
+                    ));
+                }
+            };
+
+            // Compile the value expression (pushes result onto stack)
+            let saved_tail = self.in_tail_position;
+            self.in_tail_position = false;
+            self.compile_expr(value_expr)?;
+            self.in_tail_position = saved_tail;
+
+            // The value is now on the stack at position stack_depth
+            let value_position = self.stack_depth;
+            self.stack_depth += 1;
+            num_bindings += 1;
+
+            // Create local binding
+            self.local_bindings.insert(name.clone(), ValueLocation::Local(value_position));
+            binding_names.push(name);
+        }
+
+        // Emit BeginLoop instruction to mark loop start
+        self.emit(Instruction::BeginLoop(num_bindings));
+
+        // Compile body (body is in tail position - recur will jump back)
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = true; // Body of loop is in tail position for recur
+        self.compile_expr(body_expr)?;
+        self.in_tail_position = saved_tail;
+
+        // Clean up loop bindings from stack (only executed if body returns without recur)
+        if num_bindings > 0 {
+            self.emit(Instruction::Slide(num_bindings));
+        }
+
+        // Restore binding context
+        self.local_bindings = saved_bindings;
+        self.stack_depth = saved_stack_depth;
+
+        Ok(())
+    }
+
+    fn compile_recur(&mut self, args: &[SourceExpr]) -> Result<(), CompileError> {
+        // Compile arguments (similar to function call)
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+
+        for arg in args {
+            self.compile_expr(arg)?;
+        }
+
+        self.in_tail_position = saved_tail;
+
+        // Emit Recur instruction
+        self.emit(Instruction::Recur(args.len()));
+
+        Ok(())
+    }
+
+// ==================== MACRO SYSTEM ====================
 
     // Compile defmacro: (defmacro name (params) body)
     fn compile_defmacro(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
@@ -1532,6 +2397,9 @@ impl Compiler {
             function_name: "<macro>".to_string(),
             captured: Vec::new(),
             stack_base: 0, // Macro expansion uses a fresh VM
+            loop_start: None,
+            loop_bindings_start: None,
+            loop_bindings_count: None,
         };
         vm.call_stack.push(frame);
 
@@ -1563,23 +2431,23 @@ impl Compiler {
             Value::Integer(n) => Ok(SourceExpr::unknown(LispExpr::Number(*n))),
             Value::Float(f) => Ok(SourceExpr::unknown(LispExpr::Float(*f))),
             Value::Boolean(b) => Ok(SourceExpr::unknown(LispExpr::Boolean(*b))),
-            Value::Symbol(s) => Ok(SourceExpr::unknown(LispExpr::Symbol(s.clone()))),
+            Value::Symbol(s) => Ok(SourceExpr::unknown(LispExpr::Symbol(s.to_string()))),
             Value::String(s) => {
                 // Strings are represented as special symbols in the AST
                 Ok(SourceExpr::unknown(LispExpr::Symbol(format!("__STRING__{}", s))))
             }
             Value::List(items) => {
                 let mut exprs = Vec::new();
-                for item in items {
+                for item in items.iter() {
                     exprs.push(self.value_to_expr(item)?);
                 }
                 Ok(SourceExpr::unknown(LispExpr::List(exprs)))
             }
             Value::Function(name) => {
                 // Functions become symbols in the macro expansion
-                Ok(SourceExpr::unknown(LispExpr::Symbol(name.clone())))
+                Ok(SourceExpr::unknown(LispExpr::Symbol(name.to_string())))
             }
-            Value::Closure { .. } => {
+            Value::Closure(_) => {
                 Err(CompileError::new(
                     "Cannot convert closure to expression in macro expansion".to_string(),
                     Location::unknown(),
@@ -2117,7 +2985,7 @@ impl Compiler {
     fn compile_quasiquote_list(&mut self, items: &[SourceExpr]) -> Result<(), CompileError> {
         if items.is_empty() {
             // Empty list
-            self.emit(Instruction::Push(Value::List(vec![])));
+            self.emit(Instruction::Push(Value::List(List::Nil)));
             return Ok(());
         }
 
@@ -2171,7 +3039,7 @@ impl Compiler {
             // Collect segments and splice them together
 
             // Build forward: start with list containing all non-splice elements and splice points
-            self.emit(Instruction::Push(Value::List(vec![])));
+            self.emit(Instruction::Push(Value::List(List::Nil)));
 
             for item in items.iter() {
                 if let LispExpr::List(inner) = &item.expr {
@@ -2287,7 +3155,8 @@ impl Compiler {
         }
 
         // Second pass: compile non-definition expressions into main bytecode
-        for expr in exprs {
+        // We need to track and pop intermediate results
+        let non_def_exprs: Vec<_> = exprs.iter().enumerate().filter_map(|(i, expr)| {
             let is_definition = if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
                     if let LispExpr::Symbol(s) = &first.expr {
@@ -2303,7 +3172,19 @@ impl Compiler {
             };
 
             if !is_definition {
-                self.compile_expr(expr)?;
+                Some((i, expr))
+            } else {
+                None
+            }
+        }).collect();
+
+        let num_non_defs = non_def_exprs.len();
+        for (idx, (_, expr)) in non_def_exprs.iter().enumerate() {
+            self.compile_expr(expr)?;
+            // Pop the result if it's not the last expression
+            // This prevents values from accumulating on the stack between top-level expressions
+            if idx < num_non_defs - 1 {
+                self.emit(Instruction::PopN(1));
             }
         }
 

@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Test contains runtime errors
 ; Test v19 string operations
 
 (print "=== Testing v19 String Operations ===")

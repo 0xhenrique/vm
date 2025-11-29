@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Requires pattern matching in function parameters (Phase 8)
 ; Test that v16 can compile a simple Lisp program
 ; This tests the new operators without requiring the Rust compiler to support them
 

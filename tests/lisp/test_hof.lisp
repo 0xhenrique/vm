@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Requires pattern matching and destructuring in function parameters (Phase 8)
 (defun map
   ((f '()) '())
   ((f (h . t)) (cons (f h) (map f t))))

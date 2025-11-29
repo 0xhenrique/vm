@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 use super::instructions::Instruction;
-use super::value::Value;
+use super::value::{Value, List, ClosureData};
 
 // Bytecode file format serialization
 
@@ -315,7 +316,7 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::IsNumber => bytes.push(82),
         Instruction::IntToFloat => bytes.push(83),
         Instruction::FloatToInt => bytes.push(84),
-        // Math functions (85-91)
+        // Math functions (85-103)
         Instruction::Sqrt => bytes.push(85),
         Instruction::Sin => bytes.push(86),
         Instruction::Cos => bytes.push(87),
@@ -323,6 +324,22 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::Ceil => bytes.push(89),
         Instruction::Abs => bytes.push(90),
         Instruction::Pow => bytes.push(91),
+        Instruction::Tan => bytes.push(97),
+        Instruction::Atan => bytes.push(98),
+        Instruction::Atan2 => bytes.push(99),
+        Instruction::Log => bytes.push(100),
+        Instruction::Exp => bytes.push(101),
+        Instruction::Random => bytes.push(102),
+        Instruction::RandomInt => bytes.push(103),
+        Instruction::SeedRandom => bytes.push(104),
+        // String operations (105-108)
+        Instruction::StringSplit => bytes.push(105),
+        Instruction::StringJoin => bytes.push(106),
+        Instruction::StringTrim => bytes.push(107),
+        Instruction::StringReplace => bytes.push(108),
+        // Date/Time operations (109-110)
+        Instruction::CurrentTimestamp => bytes.push(109),
+        Instruction::FormatTimestamp => bytes.push(110),
         // Metaprogramming (92+)
         Instruction::Eval => bytes.push(92),
         // Reflection (93+)
@@ -330,6 +347,22 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::FunctionParams => bytes.push(94),
         Instruction::ClosureCaptured => bytes.push(95),
         Instruction::FunctionName => bytes.push(96),
+        // Type inspection and symbol generation (114-115)
+        Instruction::TypeOf => bytes.push(114),
+        Instruction::GenSym => bytes.push(115),
+        // Loop/recur instructions (111-113)
+        Instruction::SetLocal(pos) => {
+            bytes.push(111);
+            write_u32(bytes, *pos as u32);
+        }
+        Instruction::BeginLoop(count) => {
+            bytes.push(112);
+            write_u32(bytes, *count as u32);
+        }
+        Instruction::Recur(count) => {
+            bytes.push(113);
+            write_u32(bytes, *count as u32);
+        }
     }
 }
 
@@ -475,7 +508,7 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         82 => Ok(Instruction::IsNumber),
         83 => Ok(Instruction::IntToFloat),
         84 => Ok(Instruction::FloatToInt),
-        // Math functions (85-91)
+        // Math functions (85-91, 97-104)
         85 => Ok(Instruction::Sqrt),
         86 => Ok(Instruction::Sin),
         87 => Ok(Instruction::Cos),
@@ -483,6 +516,22 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         89 => Ok(Instruction::Ceil),
         90 => Ok(Instruction::Abs),
         91 => Ok(Instruction::Pow),
+        97 => Ok(Instruction::Tan),
+        98 => Ok(Instruction::Atan),
+        99 => Ok(Instruction::Atan2),
+        100 => Ok(Instruction::Log),
+        101 => Ok(Instruction::Exp),
+        102 => Ok(Instruction::Random),
+        103 => Ok(Instruction::RandomInt),
+        104 => Ok(Instruction::SeedRandom),
+        // String operations (105-108)
+        105 => Ok(Instruction::StringSplit),
+        106 => Ok(Instruction::StringJoin),
+        107 => Ok(Instruction::StringTrim),
+        108 => Ok(Instruction::StringReplace),
+        // Date/Time operations (109-110)
+        109 => Ok(Instruction::CurrentTimestamp),
+        110 => Ok(Instruction::FormatTimestamp),
         // Metaprogramming (92+)
         92 => Ok(Instruction::Eval),
         // Reflection (93+)
@@ -490,6 +539,13 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         94 => Ok(Instruction::FunctionParams),
         95 => Ok(Instruction::ClosureCaptured),
         96 => Ok(Instruction::FunctionName),
+        // Type inspection and symbol generation (114-115)
+        114 => Ok(Instruction::TypeOf),
+        115 => Ok(Instruction::GenSym),
+        // Loop/recur instructions (111-113)
+        111 => Ok(Instruction::SetLocal(read_u32(bytes, pos)? as usize)),
+        112 => Ok(Instruction::BeginLoop(read_u32(bytes, pos)? as usize)),
+        113 => Ok(Instruction::Recur(read_u32(bytes, pos)? as usize)),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -508,10 +564,10 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             bytes.push(9);
             bytes.extend_from_slice(&f.to_le_bytes());
         }
-        Value::List(items) => {
+        Value::List(list) => {
             bytes.push(2);
-            write_u32(bytes, items.len() as u32);
-            for item in items {
+            write_u32(bytes, list.len() as u32);
+            for item in list.iter() {
                 write_value(bytes, item);
             }
         }
@@ -527,15 +583,15 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             bytes.push(5);
             write_string(bytes, name);
         }
-        Value::Closure { params, rest_param, body, captured } => {
+        Value::Closure(closure_data) => {
             bytes.push(6);
             // Write params
-            write_u32(bytes, params.len() as u32);
-            for param in params {
+            write_u32(bytes, closure_data.params.len() as u32);
+            for param in &closure_data.params {
                 write_string(bytes, param);
             }
             // Write rest_param (Option<String>)
-            match rest_param {
+            match &closure_data.rest_param {
                 None => bytes.push(0),
                 Some(rest_name) => {
                     bytes.push(1);
@@ -543,13 +599,13 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
                 }
             }
             // Write body
-            write_u32(bytes, body.len() as u32);
-            for instr in body {
+            write_u32(bytes, closure_data.body.len() as u32);
+            for instr in &closure_data.body {
                 write_instruction(bytes, instr);
             }
             // Write captured environment
-            write_u32(bytes, captured.len() as u32);
-            for (name, value) in captured {
+            write_u32(bytes, closure_data.captured.len() as u32);
+            for (name, value) in &closure_data.captured {
                 write_string(bytes, name);
                 write_value(bytes, value);
             }
@@ -559,7 +615,7 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             // Write number of entries
             write_u32(bytes, map.len() as u32);
             // Write key-value pairs
-            for (key, value) in map {
+            for (key, value) in map.iter() {
                 write_string(bytes, key);
                 write_value(bytes, value);
             }
@@ -569,7 +625,7 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             // Write number of elements
             write_u32(bytes, vec.len() as u32);
             // Write elements
-            for value in vec {
+            for value in vec.iter() {
                 write_value(bytes, value);
             }
         }
@@ -615,11 +671,11 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             for _ in 0..len {
                 items.push(read_value(bytes, pos)?);
             }
-            Ok(Value::List(items))
+            Ok(Value::List(List::from_vec(items)))
         }
-        3 => Ok(Value::Symbol(read_string(bytes, pos)?)),
-        4 => Ok(Value::String(read_string(bytes, pos)?)),
-        5 => Ok(Value::Function(read_string(bytes, pos)?)),
+        3 => Ok(Value::Symbol(Arc::new(read_string(bytes, pos)?))),
+        4 => Ok(Value::String(Arc::new(read_string(bytes, pos)?))),
+        5 => Ok(Value::Function(Arc::new(read_string(bytes, pos)?))),
         6 => {
             // Read params
             let params_len = read_u32(bytes, pos)? as usize;
@@ -649,7 +705,7 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
                 let value = read_value(bytes, pos)?;
                 captured.push((name, value));
             }
-            Ok(Value::Closure { params, rest_param, body, captured })
+            Ok(Value::Closure(Arc::new(ClosureData { params, rest_param, body, captured })))
         }
         7 => {
             // Read HashMap
@@ -660,7 +716,7 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
                 let value = read_value(bytes, pos)?;
                 map.insert(key, value);
             }
-            Ok(Value::HashMap(map))
+            Ok(Value::HashMap(Arc::new(map)))
         }
         8 => {
             // Read Vector
@@ -669,7 +725,7 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             for _ in 0..len {
                 vec.push(read_value(bytes, pos)?);
             }
-            Ok(Value::Vector(vec))
+            Ok(Value::Vector(Arc::new(vec)))
         }
         9 => {
             // Read Float

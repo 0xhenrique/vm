@@ -31,6 +31,9 @@ pub enum Instruction {
     CallClosure(usize), // Call closure with N arguments (pops closure + args from stack)
     Apply,              // Apply function to list of arguments: pop list, pop function/closure, call with list elements as args
     LoadCaptured(usize), // Load captured variable at index from current closure's environment
+    SetLocal(usize),    // Set local variable at position on value stack
+    BeginLoop(usize),   // Mark loop start with N bindings
+    Recur(usize),       // Recur with N new values: update loop bindings and jump back
     Print,
     Halt,
     // List operations
@@ -57,6 +60,10 @@ pub enum Instruction {
     StringToList,   // Pop string, push list of single-char strings
     ListToString,   // Pop list of strings/chars, push concatenated string
     CharCode,       // Pop single-char string, push ASCII code as integer
+    StringSplit,    // Pop string and delimiter, push list of substrings
+    StringJoin,     // Pop list of strings and delimiter, push joined string
+    StringTrim,     // Pop string, push trimmed string (remove leading/trailing whitespace)
+    StringReplace,  // Pop string, old, new; push string with all occurrences of old replaced with new
     // List manipulation
     Append,         // Pop two lists, push their concatenation (second appended to first)
     MakeList(usize), // Pop N values from stack and create a list from them (in order)
@@ -102,10 +109,21 @@ pub enum Instruction {
     Sqrt,                // Pop number, push square root as float
     Sin,                 // Pop number, push sine as float
     Cos,                 // Pop number, push cosine as float
+    Tan,                 // Pop number, push tangent as float
+    Atan,                // Pop number, push arctangent as float
+    Atan2,               // Pop y and x, push atan2(y, x) as float
     Floor,               // Pop number, push floor as integer
     Ceil,                // Pop number, push ceiling as integer
     Abs,                 // Pop number, push absolute value (same type)
     Pow,                 // Pop base and exponent, push power as float
+    Log,                 // Pop number, push natural logarithm as float
+    Exp,                 // Pop number, push e^x as float
+    Random,              // Push random float in [0.0, 1.0)
+    RandomInt,           // Pop max, push random integer in [0, max)
+    SeedRandom,          // Pop seed, set random seed (returns seed)
+    // Date/Time operations
+    CurrentTimestamp,    // Push current Unix timestamp as integer (seconds since epoch)
+    FormatTimestamp,     // Pop timestamp and format string, push formatted date string
     // Metaprogramming
     Eval,                // Pop string, parse and evaluate as Lisp code, push result
     // Reflection - Function Introspection
@@ -113,4 +131,8 @@ pub enum Instruction {
     FunctionParams,      // Pop closure, push list of parameter names as strings
     ClosureCaptured,     // Pop closure, push list of (name, value) pairs for captured variables
     FunctionName,        // Pop function, push name as string (error if closure)
+    // Type inspection
+    TypeOf,              // Pop value, push symbol representing its type
+    // Symbol generation
+    GenSym,              // Push a unique symbol
 }

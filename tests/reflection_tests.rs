@@ -38,13 +38,13 @@ fn format_value(value: &Value) -> String {
             format!("({})", formatted_items.join(" "))
         }
         Value::String(s) => format!("\"{}\"", s),
-        Value::Symbol(s) => s.clone(),
+        Value::Symbol(s) => s.to_string(),
         Value::Function(name) => format!("<function:{}>", name),
-        Value::Closure { params, rest_param, .. } => {
-            if let Some(rest) = rest_param {
-                format!("<closure:({:?} . {})>", params, rest)
+        Value::Closure(closure_data) => {
+            if let Some(rest) = &closure_data.rest_param {
+                format!("<closure:({:?} . {})>", closure_data.params, rest)
             } else {
-                format!("<closure:({:?})>", params)
+                format!("<closure:({:?})>", closure_data.params)
             }
         }
         Value::HashMap(_) => "<hashmap>".to_string(),

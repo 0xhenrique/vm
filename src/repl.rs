@@ -1,5 +1,6 @@
 use crate::{Compiler, VM, parser::Parser, disassembler, Value};
 use std::io::{self, Write};
+use std::sync::Arc;
 
 pub struct Repl {
     compiler: Compiler,
@@ -9,10 +10,46 @@ pub struct Repl {
 
 impl Repl {
     pub fn new() -> Self {
+        let mut compiler = Compiler::new();
+        let mut vm = VM::new();
+
+        // Auto-load stdlib.lisp if it exists
+        Self::load_stdlib(&mut compiler, &mut vm);
+
         Repl {
-            compiler: Compiler::new(),
-            vm: VM::new(),
+            compiler,
+            vm,
             input_buffer: String::new(),
+        }
+    }
+
+    fn load_stdlib(compiler: &mut Compiler, vm: &mut VM) {
+        use std::fs;
+        use std::env;
+
+        let stdlib_paths = vec![
+            "stdlib.lisp".to_string(),
+            format!("{}/stdlib.lisp", env::current_dir().unwrap().display()),
+            format!("{}/../../stdlib.lisp", env::current_exe().unwrap().parent().unwrap().display()),
+        ];
+
+        for stdlib_path in stdlib_paths {
+            if let Ok(stdlib_source) = fs::read_to_string(&stdlib_path) {
+                let mut stdlib_parser = Parser::new_with_file(&stdlib_source, stdlib_path.clone());
+                if let Ok(stdlib_exprs) = stdlib_parser.parse_all() {
+                    // Compile stdlib
+                    if let Ok((stdlib_functions, stdlib_main)) = compiler.compile_program(&stdlib_exprs) {
+                        // Merge functions into VM
+                        vm.functions.extend(stdlib_functions);
+                        // Execute stdlib initialization code
+                        vm.current_bytecode = stdlib_main;
+                        vm.instruction_pointer = 0;
+                        vm.halted = false;
+                        let _ = vm.run(); // Ignore errors during stdlib loading
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -159,15 +196,15 @@ impl Repl {
                     .collect();
                 format!("({})", formatted_items.join(" "))
             }
-            Value::Symbol(s) => s.clone(),
+            Value::Symbol(s) => s.to_string(),
             Value::String(s) => format!("\"{}\"", s),
             Value::Function(name) => format!("<function {}>", name),
-            Value::Closure { params, .. } => {
-                format!("<closure ({})>", params.join(" "))
+            Value::Closure(closure_data) => {
+                format!("<closure ({})>", closure_data.params.join(" "))
             }
             Value::HashMap(map) => {
                 let mut items: Vec<String> = map.iter()
-                    .map(|(k, v)| format!("{} {}", self.format_value(&Value::String(k.clone())), self.format_value(v)))
+                    .map(|(k, v)| format!("{} {}", self.format_value(&Value::String(Arc::new(k.clone()))), self.format_value(v)))
                     .collect();
                 items.sort(); // Sort for consistent output
                 format!("{{{}}}", items.join(" "))

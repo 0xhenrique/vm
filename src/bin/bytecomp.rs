@@ -70,6 +70,29 @@ fn main() {
 
     // Compile to bytecode
     let mut compiler = Compiler::new();
+
+    // Auto-load stdlib.lisp if it exists
+    let stdlib_paths = vec![
+        "stdlib.lisp".to_string(),
+        format!("{}/stdlib.lisp", env::current_dir().unwrap().display()),
+        format!("{}/../../stdlib.lisp", env::current_exe().unwrap().parent().unwrap().display()),
+    ];
+
+    for stdlib_path in stdlib_paths {
+        if let Ok(stdlib_source) = fs::read_to_string(&stdlib_path) {
+            let mut stdlib_parser = Parser::new_with_file(&stdlib_source, stdlib_path.clone());
+            if let Ok(stdlib_exprs) = stdlib_parser.parse_all() {
+                // Compile stdlib (ignore main bytecode, just get functions and macros)
+                if let Ok((_stdlib_functions, _)) = compiler.compile_program(&stdlib_exprs) {
+                    // Functions and macros are already in the compiler
+                    // Clear the main bytecode so it doesn't interfere with user program
+                    compiler.clear_main_bytecode();
+                    break;
+                }
+            }
+        }
+    }
+
     let (mut functions, mut main_bytecode) = match compiler.compile_program(&exprs) {
         Ok((f, m)) => (f, m),
         Err(compile_error) => {

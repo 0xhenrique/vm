@@ -140,7 +140,7 @@ fn test_load_with_global_vars() {
 
     let vm = compile_and_run(source);
     match vm.value_stack.last() {
-        Some(Value::String(s)) => assert_eq!(s, "Hello World"),
+        Some(Value::String(s)) => assert_eq!(s.as_str(), "Hello World"),
         _ => panic!("Expected string result"),
     }
 }

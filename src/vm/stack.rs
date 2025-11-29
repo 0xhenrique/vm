@@ -9,6 +9,9 @@ pub struct Frame {
     pub function_name: String, // For stack traces
     pub captured: Vec<Value>, // Captured variables for closures
     pub stack_base: usize, // Base position of this function's locals on the value stack
+    pub loop_start: Option<usize>, // Address of loop start for recur
+    pub loop_bindings_start: Option<usize>, // Stack position where loop bindings start
+    pub loop_bindings_count: Option<usize>, // Number of loop bindings
 }
 
 impl Frame {
@@ -25,6 +28,9 @@ impl Frame {
             function_name,
             captured: Vec::new(),
             stack_base,
+            loop_start: None,
+            loop_bindings_start: None,
+            loop_bindings_count: None,
         }
     }
 }

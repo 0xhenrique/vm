@@ -34,7 +34,7 @@ fn get_bool_result(vm: &VM) -> bool {
 /// Helper to get list result from VM
 fn get_list_result(vm: &VM) -> Vec<Value> {
     match vm.value_stack.last() {
-        Some(Value::List(lst)) => lst.clone(),
+        Some(Value::List(lst)) => lst.to_vec(),
         _ => panic!("Expected list result"),
     }
 }
