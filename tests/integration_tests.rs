@@ -10,7 +10,7 @@ fn compile_and_get_result(source: &str) -> i64 {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     // Get the top value from the stack
     match vm.value_stack.last() {
@@ -382,7 +382,7 @@ fn test_quote_empty_list() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Integer(1)));
 }
@@ -401,7 +401,7 @@ fn test_quote_list() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Integer(1)));
 }
@@ -438,7 +438,7 @@ fn test_list_predicate() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Boolean(true)));
 
@@ -452,7 +452,7 @@ fn test_list_predicate() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Boolean(false)));
 }
@@ -497,7 +497,7 @@ fn test_quoted_symbols() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("+".to_string())));
 }
@@ -516,7 +516,7 @@ fn test_string_literals() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Boolean(true)));
 }
@@ -535,7 +535,7 @@ fn test_symbol_string_conversion() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::String("foo".to_string())));
 
@@ -549,7 +549,7 @@ fn test_symbol_string_conversion() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::Symbol("bar".to_string())));
 }
@@ -574,7 +574,7 @@ fn test_map_basic() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(2),
@@ -606,7 +606,7 @@ fn test_map_empty_list() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
 }
@@ -634,7 +634,7 @@ fn test_filter_basic() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(3),
@@ -667,7 +667,7 @@ fn test_filter_all_pass() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(1),
@@ -700,7 +700,7 @@ fn test_filter_none_pass() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.last(), Some(&Value::List(vec![])));
 }
@@ -770,7 +770,7 @@ fn test_map_with_closure() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(11),
@@ -806,7 +806,7 @@ fn test_filter_with_closure() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(6),
@@ -844,7 +844,7 @@ fn test_compose_map_and_filter() {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
 
     let expected = Value::List(vec![
         Value::Integer(6),

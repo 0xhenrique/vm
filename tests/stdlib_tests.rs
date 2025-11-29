@@ -11,7 +11,7 @@ fn compile_and_run(source: &str) -> VM {
     let mut vm = VM::new();
     vm.functions = functions;
     vm.current_bytecode = main;
-    vm.run();
+    vm.run().unwrap();
     vm
 }
 

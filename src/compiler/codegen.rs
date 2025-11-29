@@ -1730,7 +1730,12 @@ impl Compiler {
         vm.call_stack.push(frame);
 
         // Run the VM
-        vm.run();
+        if let Err(runtime_error) = vm.run() {
+            return Err(CompileError::new(
+                format!("Macro expansion failed: {}", runtime_error.message),
+                Location::unknown(),
+            ));
+        }
 
         // Get the result from the stack
         if vm.value_stack.is_empty() {

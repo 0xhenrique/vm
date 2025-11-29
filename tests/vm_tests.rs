@@ -8,7 +8,7 @@ fn test_vm_push_and_halt() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(42));
@@ -25,7 +25,7 @@ fn test_vm_arithmetic_add() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(8));
@@ -50,7 +50,7 @@ fn test_vm_arithmetic_operations() {
             Instruction::Halt,
         ];
 
-        vm.run();
+        vm.run().unwrap();
 
         assert_eq!(vm.value_stack.len(), 1);
         assert_eq!(vm.value_stack[0], Value::Integer(expected));
@@ -66,7 +66,7 @@ fn test_vm_negation() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(-5));
@@ -100,7 +100,7 @@ fn test_vm_comparison_operations() {
             Instruction::Halt,
         ];
 
-        vm.run();
+        vm.run().unwrap();
 
         assert_eq!(vm.value_stack.len(), 1);
         assert_eq!(vm.value_stack[0], Value::Boolean(expected));
@@ -119,7 +119,7 @@ fn test_vm_conditional_jump_true() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(10));
@@ -137,7 +137,7 @@ fn test_vm_conditional_jump_false() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(20));
@@ -164,7 +164,7 @@ fn test_vm_function_call() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(10));
@@ -200,7 +200,7 @@ fn test_vm_recursive_function() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(120));
@@ -232,7 +232,7 @@ fn test_vm_multiple_function_calls() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(18)); // 7 + 11
@@ -263,7 +263,7 @@ fn test_vm_load_arg() {
         Instruction::Halt,
     ];
 
-    vm.run();
+    vm.run().unwrap();
 
     assert_eq!(vm.value_stack.len(), 1);
     assert_eq!(vm.value_stack[0], Value::Integer(20));

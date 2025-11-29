@@ -37,5 +37,8 @@ fn main() {
         vm.args = args[2..].to_vec();
     }
 
-    vm.run();
+    if let Err(runtime_error) = vm.run() {
+        eprintln!("{}", runtime_error.format());
+        std::process::exit(1);
+    }
 }

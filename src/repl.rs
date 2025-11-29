@@ -1,6 +1,5 @@
 use crate::{Compiler, VM, parser::Parser, disassembler, Value};
 use std::io::{self, Write};
-use std::panic;
 
 pub struct Repl {
     compiler: Compiler,
@@ -18,8 +17,6 @@ impl Repl {
     }
 
     pub fn run(&mut self) {
-        panic::set_hook(Box::new(|_| {}));
-
         println!("Lisp REPL v0.1.0");
         println!("Type :help for commands, :quit to exit");
         println!();
@@ -130,24 +127,14 @@ impl Repl {
         self.vm.instruction_pointer = 0;
         self.vm.halted = false;
 
-        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            self.vm.run();
-        }));
-
-        match result {
+        match self.vm.run() {
             Ok(_) => {
                 if let Some(result) = self.vm.value_stack.last() {
                     println!("=> {}", self.format_value(result));
                 }
             }
-            Err(err) => {
-                if let Some(s) = err.downcast_ref::<String>() {
-                    eprintln!("Runtime error: {}", s);
-                } else if let Some(s) = err.downcast_ref::<&str>() {
-                    eprintln!("Runtime error: {}", s);
-                } else {
-                    eprintln!("Runtime error: unknown panic");
-                }
+            Err(runtime_error) => {
+                eprintln!("{}", runtime_error.format());
             }
         }
     }

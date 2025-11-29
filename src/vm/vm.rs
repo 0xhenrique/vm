@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::value::Value;
 use super::instructions::Instruction;
 use super::stack::Frame;
+use super::errors::RuntimeError;
 
 pub struct VM {
     pub instruction_pointer: usize,
@@ -84,10 +85,10 @@ impl VM {
         self.functions.insert("print".to_string(), vec![Print, Ret]);
     }
 
-    pub fn execute_one_instruction(&mut self) {
+    pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
         if self.instruction_pointer >= self.current_bytecode.len() {
             self.halted = true;
-            return;
+            return Ok(());
         }
 
         let instruction = self.current_bytecode[self.instruction_pointer].clone();
@@ -98,130 +99,189 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::Add => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Add operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Add operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x + y));
                     }
-                    _ => panic!("Type error: Add expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '+' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Sub => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Sub operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Sub operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x - y));
                     }
-                    _ => panic!("Type error: Sub expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '-' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Mul => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Mul operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Mul operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x * y));
                     }
-                    _ => panic!("Type error: Mul expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '*' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Div => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Div operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Div operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
-                        if y == 0 {
-                            panic!("Division by zero");
+                        if *y == 0 {
+                            return Err(RuntimeError::new("Division by zero".to_string()));
                         }
                         self.value_stack.push(Value::Integer(x / y));
                     }
-                    _ => panic!("Type error: Div expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '/' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Mod => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Mod operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Mod operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
-                        if y == 0 {
-                            panic!("Modulo by zero");
+                        if *y == 0 {
+                            return Err(RuntimeError::new("Modulo by zero".to_string()));
                         }
                         self.value_stack.push(Value::Integer(x % y));
                     }
-                    _ => panic!("Type error: Mod expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '%' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Neg => {
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match a {
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Neg operation".to_string()))?;
+                match &a {
                     Value::Integer(x) => {
                         self.value_stack.push(Value::Integer(-x));
                     }
-                    _ => panic!("Type error: Neg expects integer"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'neg' expects an integer, got {}",
+                            Self::type_name(&a)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Leq => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Leq operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Leq operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x <= y));
                     }
-                    _ => panic!("Type error: Leq expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '<=' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Lt => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Lt operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Lt operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x < y));
                     }
-                    _ => panic!("Type error: Lt expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '<' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Gt => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Gt operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Gt operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x > y));
                     }
-                    _ => panic!("Type error: Gt expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '>' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Gte => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
-                match (a, b) {
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Gte operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Gte operation".to_string()))?;
+                match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x >= y));
                     }
-                    _ => panic!("Type error: Gte expects integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: '>=' expects two integers, got {} and {}",
+                            Self::type_name(&a),
+                            Self::type_name(&b)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Eq => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eq operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eq operation".to_string()))?;
                 // Use PartialEq to compare all value types
                 self.value_stack.push(Value::Boolean(a == b));
                 self.instruction_pointer += 1;
             }
             Instruction::Neq => {
-                let b = self.value_stack.pop().expect("Stack underflow");
-                let a = self.value_stack.pop().expect("Stack underflow");
+                let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Neq operation".to_string()))?;
+                let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Neq operation".to_string()))?;
                 // Use PartialEq to compare all value types
                 self.value_stack.push(Value::Boolean(a != b));
                 self.instruction_pointer += 1;
@@ -230,7 +290,7 @@ impl VM {
                 self.instruction_pointer = addr;
             }
             Instruction::JmpIfFalse(addr) => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in JmpIfFalse operation".to_string()))?;
                 match value {
                     Value::Boolean(false) => {
                         self.instruction_pointer = addr;
@@ -238,12 +298,17 @@ impl VM {
                     Value::Boolean(true) => {
                         self.instruction_pointer += 1;
                     }
-                    _ => panic!("Type error: JmpIfFalse expects boolean"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: conditional expects boolean, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
             }
             Instruction::LoadArg(idx) => {
-                let frame = self.call_stack.last().expect("No frame to load arg from");
-                let value = frame.locals.get(idx).expect("Arg index out of bounds").clone();
+                let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame to load arg from".to_string()))?;
+                let value = frame.locals.get(idx).ok_or_else(|| RuntimeError::new(format!("Arg index {} out of bounds", idx)))?.clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
@@ -256,7 +321,10 @@ impl VM {
                 };
                 let absolute_pos = stack_base + pos;
                 let value = self.value_stack.get(absolute_pos)
-                    .expect(&format!("Stack position {} (base {} + offset {}) out of bounds", absolute_pos, stack_base, pos))
+                    .ok_or_else(|| RuntimeError::new(format!(
+                        "Stack position {} (base {} + offset {}) out of bounds",
+                        absolute_pos, stack_base, pos
+                    )))?
                     .clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
@@ -264,22 +332,22 @@ impl VM {
             Instruction::PopN(n) => {
                 // Pop N values from the stack
                 for _ in 0..n {
-                    self.value_stack.pop().expect("Stack underflow during PopN");
+                    self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during PopN".to_string()))?;
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Slide(n) => {
                 // Pop the top value (result), pop N values (bindings), push result back
-                let result = self.value_stack.pop().expect("Stack underflow during Slide");
+                let result = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during Slide".to_string()))?;
                 for _ in 0..n {
-                    self.value_stack.pop().expect("Stack underflow during Slide");
+                    self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during Slide".to_string()))?;
                 }
                 self.value_stack.push(result);
                 self.instruction_pointer += 1;
             }
             Instruction::CheckArity(expected_arity, jump_addr) => {
                 // Check if current frame has the expected number of arguments
-                let frame = self.call_stack.last().expect("No frame for arity check");
+                let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame for arity check".to_string()))?;
                 if frame.locals.len() != expected_arity {
                     // Arity doesn't match, jump to next clause
                     self.instruction_pointer = jump_addr;
@@ -292,7 +360,7 @@ impl VM {
                 // Pop captured values from stack (compiler pushed them in order)
                 let mut captured_values = Vec::new();
                 for _ in 0..num_captured {
-                    captured_values.push(self.value_stack.pop().expect("Stack underflow during MakeClosure"));
+                    captured_values.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow during MakeClosure".to_string()))?);
                 }
                 captured_values.reverse(); // They were pushed in order, so reverse after popping
 
@@ -318,18 +386,22 @@ impl VM {
                 // Pop arguments from stack (in reverse order)
                 let mut args = Vec::new();
                 for _ in 0..arg_count {
-                    args.push(self.value_stack.pop().expect("Stack underflow"));
+                    args.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CallClosure".to_string()))?);
                 }
                 args.reverse();
 
                 // Pop the closure
-                let closure = self.value_stack.pop().expect("Stack underflow");
+                let closure = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CallClosure".to_string()))?;
 
                 match closure {
                     Value::Closure { params, body, captured } => {
                         // Verify arity
                         if params.len() != args.len() {
-                            panic!("Closure arity mismatch: expected {}, got {}", params.len(), args.len());
+                            return Err(RuntimeError::new(format!(
+                                "Closure arity mismatch: expected {} argument(s), got {}",
+                                params.len(),
+                                args.len()
+                            )));
                         }
 
                         // Create frame with arguments and captured environment
@@ -348,37 +420,42 @@ impl VM {
                         self.current_bytecode = body;
                         self.instruction_pointer = 0;
                     }
-                    _ => panic!("CallClosure: expected closure, got {:?}", closure),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: expected closure, got {}",
+                            Self::type_name(&closure)
+                        )));
+                    }
                 }
             }
             Instruction::LoadCaptured(idx) => {
                 // Load a captured variable from the current closure's environment
-                let frame = self.call_stack.last().expect("No frame for LoadCaptured");
+                let frame = self.call_stack.last().ok_or_else(|| RuntimeError::new("No frame for LoadCaptured".to_string()))?;
                 let value = frame.captured.get(idx)
-                    .expect(&format!("Captured variable index {} out of bounds", idx))
+                    .ok_or_else(|| RuntimeError::new(format!("Captured variable index {} out of bounds", idx)))?
                     .clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
             Instruction::Print => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Print".to_string()))?;
                 println!("{}", Self::format_value(&value));
                 self.instruction_pointer += 1;
             }
             Instruction::Ret => {
-                let frame = self.call_stack.pop().expect("No frame to return from");
+                let frame = self.call_stack.pop().ok_or_else(|| RuntimeError::new("No frame to return from".to_string()))?;
                 self.current_bytecode = frame.return_bytecode;
                 self.instruction_pointer = frame.return_address;
             }
             Instruction::Call(fn_name, arg_count) => {
                 let fn_bytecode = self.functions.get(&fn_name)
-                    .expect(&format!("Function '{}' not found", fn_name))
+                    .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                     .clone();
 
                 // Pop arguments from value stack in reverse order
                 let mut args = Vec::new();
                 for _ in 0..arg_count {
-                    args.push(self.value_stack.pop().expect("Stack underflow"));
+                    args.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Call".to_string()))?);
                 }
                 args.reverse();
 
@@ -399,13 +476,13 @@ impl VM {
             }
             Instruction::TailCall(fn_name, arg_count) => {
                 let fn_bytecode = self.functions.get(&fn_name)
-                    .expect(&format!("Function '{}' not found", fn_name))
+                    .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
                     .clone();
 
                 // Pop arguments from value stack in reverse order
                 let mut args = Vec::new();
                 for _ in 0..arg_count {
-                    args.push(self.value_stack.pop().expect("Stack underflow"));
+                    args.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in TailCall".to_string()))?);
                 }
                 args.reverse();
 
@@ -442,8 +519,8 @@ impl VM {
                 self.halted = true;
             }
             Instruction::Cons => {
-                let second = self.value_stack.pop().expect("Stack underflow");
-                let first = self.value_stack.pop().expect("Stack underflow");
+                let second = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Cons".to_string()))?;
+                let first = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Cons".to_string()))?;
 
                 // cons creates a list by prepending first to second
                 // (cons 1 '(2 3)) -> '(1 2 3)
@@ -461,82 +538,108 @@ impl VM {
                 self.instruction_pointer += 1;
             }
             Instruction::Car => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Car".to_string()))?;
                 match value {
                     Value::List(items) => {
                         if items.is_empty() {
-                            panic!("car: cannot take car of empty list");
+                            return Err(RuntimeError::new("'car' cannot take the first element of an empty list".to_string()));
                         }
                         self.value_stack.push(items[0].clone());
                     }
-                    _ => panic!("car: expected list"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'car' expects a list, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Cdr => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Cdr".to_string()))?;
                 match value {
                     Value::List(items) => {
                         if items.is_empty() {
-                            panic!("cdr: cannot take cdr of empty list");
+                            return Err(RuntimeError::new("'cdr' cannot take the rest of an empty list".to_string()));
                         }
                         let rest = items[1..].to_vec();
                         self.value_stack.push(Value::List(rest));
                     }
-                    _ => panic!("cdr: expected list"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'cdr' expects a list, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::IsList => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsList".to_string()))?;
                 let is_list = matches!(value, Value::List(_));
                 self.value_stack.push(Value::Boolean(is_list));
                 self.instruction_pointer += 1;
             }
             Instruction::IsString => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsString".to_string()))?;
                 let is_string = matches!(value, Value::String(_));
                 self.value_stack.push(Value::Boolean(is_string));
                 self.instruction_pointer += 1;
             }
             Instruction::IsSymbol => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsSymbol".to_string()))?;
                 let is_symbol = matches!(value, Value::Symbol(_));
                 self.value_stack.push(Value::Boolean(is_symbol));
                 self.instruction_pointer += 1;
             }
             Instruction::SymbolToString => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in SymbolToString".to_string()))?;
                 match value {
                     Value::Symbol(s) => {
                         self.value_stack.push(Value::String(s));
                     }
-                    _ => panic!("symbol->string: expected symbol"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'symbol->string' expects a symbol, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::StringToSymbol => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringToSymbol".to_string()))?;
                 match value {
                     Value::String(s) => {
                         self.value_stack.push(Value::Symbol(s));
                     }
-                    _ => panic!("string->symbol: expected string"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string->symbol' expects a string, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Append => {
                 // Pop two lists and append them
-                let second = self.value_stack.pop().expect("Stack underflow");
-                let first = self.value_stack.pop().expect("Stack underflow");
+                let second = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Append".to_string()))?;
+                let first = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Append".to_string()))?;
 
-                match (first, second) {
-                    (Value::List(mut first_items), Value::List(second_items)) => {
-                        // Append second to first
-                        first_items.extend(second_items);
-                        self.value_stack.push(Value::List(first_items));
+                match (&first, &second) {
+                    (Value::List(first_items), Value::List(second_items)) => {
+                        let mut result = first_items.clone();
+                        result.extend(second_items.clone());
+                        self.value_stack.push(Value::List(result));
                     }
-                    _ => panic!("append: expected two lists"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'append' expects two lists, got {} and {}",
+                            Self::type_name(&first),
+                            Self::type_name(&second)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
@@ -544,7 +647,7 @@ impl VM {
                 // Pop n values and create a list
                 let mut items = Vec::new();
                 for _ in 0..n {
-                    items.push(self.value_stack.pop().expect("Stack underflow"));
+                    items.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeList".to_string()))?);
                 }
                 items.reverse(); // Reverse because we popped in reverse order
                 self.value_stack.push(Value::List(items));
@@ -552,102 +655,142 @@ impl VM {
             }
             Instruction::ListRef => {
                 // Pop index and list, push element at that index
-                let index = self.value_stack.pop().expect("Stack underflow");
-                let list = self.value_stack.pop().expect("Stack underflow");
+                let index = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListRef".to_string()))?;
+                let list = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListRef".to_string()))?;
 
-                match (list, index) {
+                match (&list, &index) {
                     (Value::List(items), Value::Integer(idx)) => {
-                        if idx < 0 {
-                            panic!("list-ref: index cannot be negative: {}", idx);
+                        if *idx < 0 {
+                            return Err(RuntimeError::new(format!("'list-ref' index cannot be negative: {}", idx)));
                         }
-                        let idx_usize = idx as usize;
+                        let idx_usize = *idx as usize;
                         if idx_usize >= items.len() {
-                            panic!("list-ref: index {} out of bounds for list of length {}", idx, items.len());
+                            return Err(RuntimeError::new(format!(
+                                "'list-ref' index {} out of bounds for list of length {}",
+                                idx, items.len()
+                            )));
                         }
                         self.value_stack.push(items[idx_usize].clone());
                     }
-                    _ => panic!("list-ref: expected list and integer index"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'list-ref' expects a list and an integer, got {} and {}",
+                            Self::type_name(&list),
+                            Self::type_name(&index)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::ListLength => {
                 // Pop list and push its length
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListLength".to_string()))?;
                 match value {
                     Value::List(items) => {
                         self.value_stack.push(Value::Integer(items.len() as i64));
                     }
-                    _ => panic!("list-length: expected list"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'list-length' expects a list, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::NumberToString => {
                 // Pop integer and push string representation
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in NumberToString".to_string()))?;
                 match value {
                     Value::Integer(n) => {
                         self.value_stack.push(Value::String(n.to_string()));
                     }
-                    _ => panic!("number->string: expected integer"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'number->string' expects an integer, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::LoadGlobal(name) => {
                 let value = self.global_vars.get(&name)
-                    .expect(&format!("Undefined global variable: {}", name))
+                    .ok_or_else(|| RuntimeError::new(format!("Undefined global variable '{}'", name)))?
                     .clone();
                 self.value_stack.push(value);
                 self.instruction_pointer += 1;
             }
             Instruction::StoreGlobal(name) => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StoreGlobal".to_string()))?;
                 self.global_vars.insert(name, value);
                 self.instruction_pointer += 1;
             }
             Instruction::StringLength => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringLength".to_string()))?;
                 match value {
                     Value::String(s) => {
                         self.value_stack.push(Value::Integer(s.len() as i64));
                     }
-                    _ => panic!("string-length: expected string"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-length' expects a string, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::Substring => {
-                let end = self.value_stack.pop().expect("Stack underflow");
-                let start = self.value_stack.pop().expect("Stack underflow");
-                let string = self.value_stack.pop().expect("Stack underflow");
+                let end = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Substring".to_string()))?;
+                let start = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Substring".to_string()))?;
+                let string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Substring".to_string()))?;
 
-                match (string, start, end) {
+                match (&string, &start, &end) {
                     (Value::String(s), Value::Integer(start_idx), Value::Integer(end_idx)) => {
-                        let start = start_idx.max(0) as usize;
-                        let end = end_idx.min(s.len() as i64) as usize;
+                        let start = (*start_idx).max(0) as usize;
+                        let end = (*end_idx).min(s.len() as i64) as usize;
                         if start <= end && end <= s.len() {
                             let result = s.chars().skip(start).take(end - start).collect::<String>();
                             self.value_stack.push(Value::String(result));
                         } else {
-                            panic!("substring: invalid indices");
+                            return Err(RuntimeError::new(format!(
+                                "'substring' invalid indices: start={}, end={}, string length={}",
+                                start_idx, end_idx, s.len()
+                            )));
                         }
                     }
-                    _ => panic!("substring: expected string and two integers"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'substring' expects a string and two integers, got {}, {}, and {}",
+                            Self::type_name(&string),
+                            Self::type_name(&start),
+                            Self::type_name(&end)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::StringAppend => {
-                let second = self.value_stack.pop().expect("Stack underflow");
-                let first = self.value_stack.pop().expect("Stack underflow");
+                let second = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringAppend".to_string()))?;
+                let first = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringAppend".to_string()))?;
 
-                match (first, second) {
+                match (&first, &second) {
                     (Value::String(s1), Value::String(s2)) => {
                         self.value_stack.push(Value::String(format!("{}{}", s1, s2)));
                     }
-                    _ => panic!("string-append: expected two strings"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string-append' expects two strings, got {} and {}",
+                            Self::type_name(&first),
+                            Self::type_name(&second)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::StringToList => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringToList".to_string()))?;
                 match value {
                     Value::String(s) => {
                         let char_list: Vec<Value> = s.chars()
@@ -655,43 +798,66 @@ impl VM {
                             .collect();
                         self.value_stack.push(Value::List(char_list));
                     }
-                    _ => panic!("string->list: expected string"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string->list' expects a string, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::ListToString => {
-                let value = self.value_stack.pop().expect("Stack underflow");
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListToString".to_string()))?;
                 match value {
                     Value::List(items) => {
                         let mut result = String::new();
-                        for item in items {
+                        for item in &items {
                             match item {
-                                Value::String(s) => result.push_str(&s),
-                                _ => panic!("list->string: list must contain only strings"),
+                                Value::String(s) => result.push_str(s),
+                                _ => {
+                                    return Err(RuntimeError::new(format!(
+                                        "Type error: 'list->string' expects a list of strings, but found {}",
+                                        Self::type_name(item)
+                                    )));
+                                }
                             }
                         }
                         self.value_stack.push(Value::String(result));
                     }
-                    _ => panic!("list->string: expected list"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'list->string' expects a list, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::CharCode => {
-                let value = self.value_stack.pop().expect("Stack underflow");
-                match value {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CharCode".to_string()))?;
+                match &value {
                     Value::String(s) => {
                         if s.len() != 1 {
-                            panic!("char-code: expected single-character string, got {} characters", s.len());
+                            return Err(RuntimeError::new(format!(
+                                "'char-code' expects a single-character string, got {} characters",
+                                s.len()
+                            )));
                         }
                         let code = s.chars().next().unwrap() as i64;
                         self.value_stack.push(Value::Integer(code));
                     }
-                    _ => panic!("char-code: expected string"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'char-code' expects a string, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::ReadFile => {
-                let path = self.value_stack.pop().expect("Stack underflow");
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ReadFile".to_string()))?;
                 match path {
                     Value::String(path_str) => {
                         match std::fs::read_to_string(&path_str) {
@@ -699,21 +865,29 @@ impl VM {
                                 self.value_stack.push(Value::String(contents));
                             }
                             Err(e) => {
-                                panic!("read-file: failed to read '{}': {}", path_str, e);
+                                return Err(RuntimeError::new(format!(
+                                    "'read-file' failed to read '{}': {}",
+                                    path_str, e
+                                )));
                             }
                         }
                     }
-                    _ => panic!("read-file: expected string path"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'read-file' expects a string path, got {}",
+                            Self::type_name(&path)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::WriteFile => {
-                let content = self.value_stack.pop().expect("Stack underflow");
-                let path = self.value_stack.pop().expect("Stack underflow");
+                let content = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in WriteFile".to_string()))?;
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in WriteFile".to_string()))?;
 
-                match (path, content) {
+                match (&path, &content) {
                     (Value::String(path_str), Value::String(content_str)) => {
-                        match std::fs::write(&path_str, &content_str) {
+                        match std::fs::write(path_str, content_str) {
                             Ok(_) => {
                                 self.value_stack.push(Value::Boolean(true));
                             }
@@ -723,40 +897,56 @@ impl VM {
                             }
                         }
                     }
-                    _ => panic!("write-file: expected string path and string content"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'write-file' expects a string path and string content, got {} and {}",
+                            Self::type_name(&path),
+                            Self::type_name(&content)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::FileExists => {
-                let path = self.value_stack.pop().expect("Stack underflow");
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FileExists".to_string()))?;
                 match path {
                     Value::String(path_str) => {
                         let exists = std::path::Path::new(&path_str).exists();
                         self.value_stack.push(Value::Boolean(exists));
                     }
-                    _ => panic!("file-exists?: expected string path"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'file-exists?' expects a string path, got {}",
+                            Self::type_name(&path)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
             Instruction::WriteBinaryFile => {
-                let bytes_list = self.value_stack.pop().expect("Stack underflow");
-                let path = self.value_stack.pop().expect("Stack underflow");
+                let bytes_list = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in WriteBinaryFile".to_string()))?;
+                let path = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in WriteBinaryFile".to_string()))?;
 
-                match (path, bytes_list) {
+                match (&path, &bytes_list) {
                     (Value::String(path_str), Value::List(bytes)) => {
                         // Convert list of integers to Vec<u8>
                         let mut byte_vec = Vec::new();
                         for byte_val in bytes {
                             match byte_val {
-                                Value::Integer(n) if n >= 0 && n <= 255 => {
-                                    byte_vec.push(n as u8);
+                                Value::Integer(n) if *n >= 0 && *n <= 255 => {
+                                    byte_vec.push(*n as u8);
                                 }
-                                _ => panic!("write-binary-file: list must contain integers 0-255"),
+                                _ => {
+                                    return Err(RuntimeError::new(format!(
+                                        "'write-binary-file' expects a list of integers 0-255, but found {}",
+                                        Self::type_name(byte_val)
+                                    )));
+                                }
                             }
                         }
 
                         // Write bytes to file
-                        match std::fs::write(&path_str, &byte_vec) {
+                        match std::fs::write(path_str, &byte_vec) {
                             Ok(_) => self.value_stack.push(Value::Boolean(true)),
                             Err(e) => {
                                 eprintln!("write-binary-file: failed to write '{}': {}", path_str, e);
@@ -764,7 +954,13 @@ impl VM {
                             }
                         }
                     }
-                    _ => panic!("write-binary-file: expected string path and list of bytes"),
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'write-binary-file' expects a string path and a list of bytes, got {} and {}",
+                            Self::type_name(&path),
+                            Self::type_name(&bytes_list)
+                        )));
+                    }
                 }
                 self.instruction_pointer += 1;
             }
@@ -776,6 +972,19 @@ impl VM {
                 self.value_stack.push(Value::List(args_list));
                 self.instruction_pointer += 1;
             }
+        }
+
+        Ok(())
+    }
+
+    fn type_name(value: &Value) -> &str {
+        match value {
+            Value::Integer(_) => "integer",
+            Value::Boolean(_) => "boolean",
+            Value::List(_) => "list",
+            Value::Symbol(_) => "symbol",
+            Value::String(_) => "string",
+            Value::Closure { .. } => "closure",
         }
     }
 
@@ -798,10 +1007,11 @@ impl VM {
         }
     }
 
-    pub fn run(&mut self) {
+    pub fn run(&mut self) -> Result<(), RuntimeError> {
         while !self.halted {
-            self.execute_one_instruction();
+            self.execute_one_instruction()?;
         }
+        Ok(())
     }
 
     pub fn get_stack_trace(&self) -> Vec<String> {
