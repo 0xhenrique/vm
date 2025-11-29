@@ -1,8 +1,8 @@
 ; Minimal test to debug the compiler
 
 ; Load the necessary pieces
-(defconst OP-PUSH 'push)
-(defconst OP-ADD 'add)
+(def OP-PUSH 'push)
+(def OP-ADD 'add)
 
 (defun make-env (() '()))
 

@@ -1,6 +1,6 @@
 ; Debug: test pattern matching compilation
 
-(defconst test-clauses '(((0) true) ((n) false)))
+(def test-clauses '(((0) true) ((n) false)))
 
 (print "Test clauses:")
 (print test-clauses)
@@ -30,11 +30,11 @@
 (defun get-clause-body (((patterns body)) body))
 (defun get-first-pattern ((patterns) (car patterns)))
 
-(defconst OP-PUSH 'push)
-(defconst OP-LOAD-ARG 'load-arg)
-(defconst OP-EQ 'eq)
-(defconst OP-JMP-IF-FALSE 'jmp-if-false)
-(defconst OP-RET 'ret)
+(def OP-PUSH 'push)
+(def OP-LOAD-ARG 'load-arg)
+(def OP-EQ 'eq)
+(def OP-JMP-IF-FALSE 'jmp-if-false)
+(def OP-RET 'ret)
 
 (defun make-instr-1 ((op) (cons op '())))
 (defun make-instr-2 ((op arg) (cons op (cons arg '()))))

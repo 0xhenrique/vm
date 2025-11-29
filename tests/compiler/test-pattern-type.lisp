@@ -7,12 +7,12 @@
 (print (symbol? 'n))
 
 (print "Is n a symbol (without quote)?")
-(defconst n 5)
+(def n 5)
 (print (symbol? n))
 
 ; Now test with actual patterns
-(defconst clause1 '((0) true))
-(defconst clause2 '((n) false))
+(def clause1 '((0) true))
+(def clause2 '((n) false))
 
 (defun get-clause-patterns (((patterns body)) patterns))
 (defun get-first-pattern ((patterns) (car patterns)))

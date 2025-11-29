@@ -10,8 +10,8 @@
 ; ============================================================================
 
 (print "Test 1: write and read file")
-(defvar test-path "/tmp/lisp-test-file.txt")
-(defvar test-content "Hello from Lisp!")
+(def test-path "/tmp/lisp-test-file.txt")
+(def test-content "Hello from Lisp!")
 
 (print (write-file test-path test-content))
 (print (read-file test-path))
@@ -31,8 +31,8 @@
 ; ============================================================================
 
 (print "Test 3: multi-line content")
-(defvar multiline-path "/tmp/lisp-multiline.txt")
-(defvar multiline-content (string-append "Line 1"
+(def multiline-path "/tmp/lisp-multiline.txt")
+(def multiline-content (string-append "Line 1"
                              (string-append "\n"
                                (string-append "Line 2"
                                  (string-append "\n" "Line 3")))))
@@ -55,9 +55,9 @@
 ; ============================================================================
 
 (print "Test 5: read part of this source file")
-(defvar this-file "tests/test-v19-file-io.lisp")
-(defvar contents (read-file this-file))
-(defvar first-line (substring contents 0 31))
+(def this-file "tests/test-v19-file-io.lisp")
+(def contents (read-file this-file))
+(def first-line (substring contents 0 31))
 (print first-line)
 (print "")
 

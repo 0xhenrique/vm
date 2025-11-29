@@ -12,7 +12,7 @@
 (print (get-clause-body '((0) true)))
 
 ; Test with list of clauses
-(defconst test-clauses '(((0) true) ((n) false)))
+(def test-clauses '(((0) true) ((n) false)))
 
 (print "All clauses:")
 (print test-clauses)

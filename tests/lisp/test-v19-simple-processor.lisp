@@ -25,8 +25,8 @@
   ((str) (search-defun-helper str 0)))
 
 ; Read a Lisp source file and analyze it
-(defvar source-file "tests/test-v18-cons-patterns.lisp")
-(defvar source-code (read-file source-file))
+(def source-file "tests/test-v18-cons-patterns.lisp")
+(def source-code (read-file source-file))
 
 (print "Analyzing file: tests/test-v18-cons-patterns.lisp")
 (print (string-append "File size: " (string-append (if (> (count-chars source-code) 0) "non-empty" "empty") " file")))
@@ -37,10 +37,10 @@
 ; Write generated code
 ; ============================================================================
 
-(defvar output-path "/tmp/generated-lisp.lisp")
-(defvar line1 "; Generated code\n")
-(defvar line2 "(print 42)\n")
-(defvar generated-code (string-append line1 line2))
+(def output-path "/tmp/generated-lisp.lisp")
+(def line1 "; Generated code\n")
+(def line2 "(print 42)\n")
+(def generated-code (string-append line1 line2))
 
 (print "Writing generated code to /tmp/generated-lisp.lisp")
 (print (write-file output-path generated-code))

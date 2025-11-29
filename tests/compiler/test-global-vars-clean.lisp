@@ -1,12 +1,12 @@
 ; Clean test of global variables with comments!
 
 ; Constants
-(defconst PI 3)
-(defconst GREETING "Hello")
+(def PI 3)
+(def GREETING "Hello")
 
 ; Variables
-(defvar age 35)
-(defvar name "henrique")
+(def age 35)
+(def name "henrique")
 
 ; Test basic access
 (print "=== Basic Access ===")

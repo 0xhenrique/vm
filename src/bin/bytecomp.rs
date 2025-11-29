@@ -93,6 +93,8 @@ fn main() {
 
         println!("Optimization results:");
         println!("  Constant folds: {}", stats.constant_folds);
+        println!("  Peephole optimizations: {}", stats.peephole_optimizations);
+        println!("  Strength reductions: {}", stats.strength_reductions);
         println!("  Dead code removed: {}", stats.dead_code_removed);
         println!("  Jump chains simplified: {}", stats.jump_chains_simplified);
         println!("  Original instructions: {}", original_total);

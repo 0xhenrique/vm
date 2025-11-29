@@ -106,4 +106,11 @@ pub enum Instruction {
     Ceil,                // Pop number, push ceiling as integer
     Abs,                 // Pop number, push absolute value (same type)
     Pow,                 // Pop base and exponent, push power as float
+    // Metaprogramming
+    Eval,                // Pop string, parse and evaluate as Lisp code, push result
+    // Reflection - Function Introspection
+    FunctionArity,       // Pop function/closure, push arity as integer (-1 for variadic)
+    FunctionParams,      // Pop closure, push list of parameter names as strings
+    ClosureCaptured,     // Pop closure, push list of (name, value) pairs for captured variables
+    FunctionName,        // Pop function, push name as string (error if closure)
 }

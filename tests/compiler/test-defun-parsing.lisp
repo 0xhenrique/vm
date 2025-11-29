@@ -1,6 +1,6 @@
 ; Test: how defun-form parses clauses
 
-(defconst test-defun '(defun is-zero ((0) true) ((n) false)))
+(def test-defun '(defun is-zero ((0) true) ((n) false)))
 
 (print "Full defun:")
 (print test-defun)

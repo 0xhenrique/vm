@@ -323,6 +323,13 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::Ceil => bytes.push(89),
         Instruction::Abs => bytes.push(90),
         Instruction::Pow => bytes.push(91),
+        // Metaprogramming (92+)
+        Instruction::Eval => bytes.push(92),
+        // Reflection (93+)
+        Instruction::FunctionArity => bytes.push(93),
+        Instruction::FunctionParams => bytes.push(94),
+        Instruction::ClosureCaptured => bytes.push(95),
+        Instruction::FunctionName => bytes.push(96),
     }
 }
 
@@ -476,6 +483,13 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         89 => Ok(Instruction::Ceil),
         90 => Ok(Instruction::Abs),
         91 => Ok(Instruction::Pow),
+        // Metaprogramming (92+)
+        92 => Ok(Instruction::Eval),
+        // Reflection (93+)
+        93 => Ok(Instruction::FunctionArity),
+        94 => Ok(Instruction::FunctionParams),
+        95 => Ok(Instruction::ClosureCaptured),
+        96 => Ok(Instruction::FunctionName),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }

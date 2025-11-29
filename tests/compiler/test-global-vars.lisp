@@ -1,12 +1,12 @@
 ; Test global variables with comments!
 
 ; Define some constants
-(defconst PI 3)
-(defconst MAX-VALUE 100)
+(def PI 3)
+(def MAX-VALUE 100)
 
 ; Define some variables
-(defvar my-name "henrique")
-(defvar counter 0)
+(def my-name "henrique")
+(def counter 0)
 
 ; Test: Can we access them?
 (print PI)
@@ -25,5 +25,5 @@
 (print (double-counter))
 
 ; Test: Modify a defvar (this should work)
-(defvar counter (+ counter 5))
+(def counter (+ counter 5))
 (print counter)

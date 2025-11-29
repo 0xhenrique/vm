@@ -126,7 +126,7 @@ fn test_load_file_not_found() {
 #[test]
 fn test_load_with_global_vars() {
     let lib_content = r#"
-        (defvar *greeting* "Hello")
+        (def *greeting* "Hello")
 
         (defun greet (name)
           (string-append *greeting* (string-append " " name)))
@@ -204,33 +204,33 @@ fn test_require_returns_true() {
 #[test]
 fn test_require_caching_no_redefine() {
     // This test verifies that require caches and doesn't reload
-    // We define a counter in the file that increments on load
-    // If require is called twice, the counter should only increment once
+    // With immutable bindings, if require loads the file multiple times,
+    // it will error trying to redefine the constant.
+    // If it caches properly, no error should occur.
 
     let lib_content = r#"
-        (defvar *load-count* 0)
-        (defvar *load-count* (+ *load-count* 1))
-        (defun get-load-count () *load-count*)
+        (def *lib-loaded* true)
+        (defun lib-function () 42)
     "#;
     fs::write("/tmp/test-require-cache.lisp", lib_content).unwrap();
 
     let source = r#"
-        ; First require - loads the file, counter becomes 1
+        ; First require - loads the file
         (require "/tmp/test-require-cache.lisp")
 
-        ; Second require - should be cached, counter should still be 1
+        ; Second require - should be cached, won't try to redefine *lib-loaded*
         (require "/tmp/test-require-cache.lisp")
 
-        ; Third require - cached again, still 1
+        ; Third require - cached again
         (require "/tmp/test-require-cache.lisp")
 
-        ; Return the load count - should be 1 if caching works
-        (get-load-count)
+        ; Return result - if we got here without error, caching works!
+        (lib-function)
     "#;
 
     let vm = compile_and_run(source);
     match vm.value_stack.last() {
-        Some(Value::Integer(n)) => assert_eq!(*n, 1), // Only loaded once!
+        Some(Value::Integer(n)) => assert_eq!(*n, 42), // Success - no redefinition error!
         _ => panic!("Expected integer result"),
     }
 }

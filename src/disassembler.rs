@@ -157,6 +157,13 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::Ceil => "Ceil".to_string(),
         Instruction::Abs => "Abs".to_string(),
         Instruction::Pow => "Pow".to_string(),
+        // Metaprogramming
+        Instruction::Eval => "Eval".to_string(),
+        // Reflection
+        Instruction::FunctionArity => "FunctionArity".to_string(),
+        Instruction::FunctionParams => "FunctionParams".to_string(),
+        Instruction::ClosureCaptured => "ClosureCaptured".to_string(),
+        Instruction::FunctionName => "FunctionName".to_string(),
     }
 }
 

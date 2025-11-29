@@ -1,6 +1,6 @@
 ; Test: check if clauses pattern matching works
 
-(defconst test-clauses '(((0) true) ((n) false)))
+(def test-clauses '(((0) true) ((n) false)))
 
 (print "Test clauses:")
 (print test-clauses)

@@ -72,18 +72,18 @@
 ; ============================================================================
 
 (print "Test 11: defconst defines constant")
-(defconst MY-CONSTANT 42)
+(def MY-CONSTANT 42)
 (print MY-CONSTANT)
 (print "")
 
 (print "Test 12: defvar defines variable")
-(defvar my-variable 10)
+(def my-variable 10)
 (print my-variable)
 (print "")
 
 ; Redefine defvar is allowed
 (print "Test 13: redefining defvar is allowed")
-(defvar my-variable 20)
+(def my-variable 20)
 (print my-variable)
 (print "")
 

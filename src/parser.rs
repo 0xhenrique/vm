@@ -79,6 +79,56 @@ impl Parser {
                 let unquoted_list = vec![unquote_symbol, unquoted_expr];
                 Ok(SourceExpr::new(LispExpr::List(unquoted_list), location))
             }
+        } else if token.text == "#" {
+            // Reader macro dispatch character
+            self.pos += 1;
+
+            if self.pos >= self.tokens.len() {
+                return Err("Unexpected end of input after '#'".to_string());
+            }
+
+            let dispatch_char = &self.tokens[self.pos].text;
+
+            if dispatch_char == "(" {
+                // Vector literal: #(1 2 3) → (vector 1 2 3)
+                let vector_list = self.parse_list()?;
+
+                match vector_list.expr {
+                    LispExpr::List(elements) => {
+                        // Transform to (vector element1 element2 ...)
+                        let mut vector_call = vec![
+                            SourceExpr::new(LispExpr::Symbol("vector".to_string()), location.clone())
+                        ];
+                        vector_call.extend(elements);
+                        Ok(SourceExpr::new(LispExpr::List(vector_call), location))
+                    }
+                    _ => Err("Expected list after #(".to_string()),
+                }
+            } else if dispatch_char == "t" {
+                // Boolean true: #t → true
+                self.pos += 1;
+                Ok(SourceExpr::new(LispExpr::Boolean(true), location))
+            } else if dispatch_char == "f" {
+                // Boolean false: #f → false
+                self.pos += 1;
+                Ok(SourceExpr::new(LispExpr::Boolean(false), location))
+            } else if dispatch_char == ";" {
+                // Comment out next expression: #;expr → (nothing)
+                self.pos += 1; // consume ';'
+
+                // Parse and discard the next expression
+                let _discarded = self.parse_expr()?;
+
+                // Now parse and return the expression after the discarded one
+                self.parse_expr()
+            } else if dispatch_char == "'" {
+                // Function quote: #'symbol → symbol
+                // In our Lisp, function names are already first-class values
+                self.pos += 1; // consume '
+                self.parse_expr()
+            } else {
+                Err(format!("Unknown reader macro: #{}", dispatch_char))
+            }
         } else if token.text == "true" {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Boolean(true), location))
@@ -223,19 +273,41 @@ fn tokenize(input: &str) -> Vec<Token> {
                     column += 1;
                 }
                 ';' => {
-                    // Start of comment - skip until end of line
-                    if !current.is_empty() {
+                    // Check if previous token was '#' - if so, this is part of #; reader macro
+                    let is_reader_macro = !tokens.is_empty() && tokens.last().unwrap().text == "#";
+
+                    if is_reader_macro {
+                        // Treat ';' as a special token (part of #; reader macro)
+                        if !current.is_empty() {
+                            tokens.push(Token {
+                                text: current.clone(),
+                                line,
+                                column: token_start_column,
+                            });
+                            current.clear();
+                        }
                         tokens.push(Token {
-                            text: current.clone(),
+                            text: ";".to_string(),
                             line,
-                            column: token_start_column,
+                            column,
                         });
-                        current.clear();
+                        column += 1;
+                        token_start_column = column;
+                    } else {
+                        // Start of comment - skip until end of line
+                        if !current.is_empty() {
+                            tokens.push(Token {
+                                text: current.clone(),
+                                line,
+                                column: token_start_column,
+                            });
+                            current.clear();
+                        }
+                        in_comment = true;
+                        column += 1;
                     }
-                    in_comment = true;
-                    column += 1;
                 }
-                '(' | ')' | '\'' | '`' | ',' | '@' => {
+                '(' | ')' | '\'' | '`' | ',' | '@' | '#' => {
                     if !current.is_empty() {
                         tokens.push(Token {
                             text: current.clone(),
@@ -501,6 +573,194 @@ mod tests {
                 assert_eq!(items.len(), 4);
                 assert_eq!(items[0].expr, LispExpr::Symbol("defun".to_string()));
                 assert_eq!(items[1].expr, LispExpr::Symbol("add".to_string()));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_vector_literal() {
+        let mut parser = Parser::new("#(1 2 3)");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0].expr, LispExpr::Symbol("vector".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Number(1));
+                assert_eq!(items[2].expr, LispExpr::Number(2));
+                assert_eq!(items[3].expr, LispExpr::Number(3));
+            }
+            _ => panic!("Expected List (vector ...)"),
+        }
+    }
+
+    #[test]
+    fn test_parse_empty_vector_literal() {
+        let mut parser = Parser::new("#()");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0].expr, LispExpr::Symbol("vector".to_string()));
+            }
+            _ => panic!("Expected List (vector)"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_vector_literal() {
+        let mut parser = Parser::new("#(1 #(2 3) 4)");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0].expr, LispExpr::Symbol("vector".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Number(1));
+
+                // Check nested vector
+                match &items[2].expr {
+                    LispExpr::List(nested) => {
+                        assert_eq!(nested.len(), 3);
+                        assert_eq!(nested[0].expr, LispExpr::Symbol("vector".to_string()));
+                        assert_eq!(nested[1].expr, LispExpr::Number(2));
+                        assert_eq!(nested[2].expr, LispExpr::Number(3));
+                    }
+                    _ => panic!("Expected nested vector"),
+                }
+
+                assert_eq!(items[3].expr, LispExpr::Number(4));
+            }
+            _ => panic!("Expected List (vector ...)"),
+        }
+    }
+
+    #[test]
+    fn test_parse_vector_with_expressions() {
+        let mut parser = Parser::new("#((+ 1 2) (* 3 4))");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].expr, LispExpr::Symbol("vector".to_string()));
+
+                // Check first element is (+ 1 2)
+                match &items[1].expr {
+                    LispExpr::List(add_expr) => {
+                        assert_eq!(add_expr.len(), 3);
+                        assert_eq!(add_expr[0].expr, LispExpr::Symbol("+".to_string()));
+                    }
+                    _ => panic!("Expected list expression"),
+                }
+            }
+            _ => panic!("Expected List (vector ...)"),
+        }
+    }
+
+    #[test]
+    fn test_parse_boolean_true_reader_macro() {
+        let mut parser = Parser::new("#t");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Boolean(true));
+    }
+
+    #[test]
+    fn test_parse_boolean_false_reader_macro() {
+        let mut parser = Parser::new("#f");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Boolean(false));
+    }
+
+    #[test]
+    fn test_parse_boolean_reader_macros_in_list() {
+        let mut parser = Parser::new("(if #t #f true)");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0].expr, LispExpr::Symbol("if".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Boolean(true));
+                assert_eq!(items[2].expr, LispExpr::Boolean(false));
+                assert_eq!(items[3].expr, LispExpr::Boolean(true));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expression_comment() {
+        let mut parser = Parser::new("(+ 1 #;(* 2 3) 4)");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 3); // +, 1, 4 (the (* 2 3) is commented out)
+                assert_eq!(items[0].expr, LispExpr::Symbol("+".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Number(1));
+                assert_eq!(items[2].expr, LispExpr::Number(4));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_expression_comment_at_top_level() {
+        let mut parser = Parser::new("#;(this is ignored) 42");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        assert_eq!(exprs[0].expr, LispExpr::Number(42));
+    }
+
+    #[test]
+    fn test_parse_nested_expression_comment() {
+        let mut parser = Parser::new("(+ 1 #;#;2 3 4)");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 3); // +, 1, 4 (both 2 and 3 are commented)
+                assert_eq!(items[0].expr, LispExpr::Symbol("+".to_string()));
+                assert_eq!(items[1].expr, LispExpr::Number(1));
+                assert_eq!(items[2].expr, LispExpr::Number(4));
+            }
+            _ => panic!("Expected List"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_quote() {
+        let mut parser = Parser::new("#'add");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+        // #'add → add (since function names are first-class)
+        assert_eq!(exprs[0].expr, LispExpr::Symbol("add".to_string()));
+    }
+
+    #[test]
+    fn test_parse_function_quote_in_expression() {
+        let mut parser = Parser::new("(apply #'+ '(1 2 3))");
+        let exprs = parser.parse_all().unwrap();
+        assert_eq!(exprs.len(), 1);
+
+        match &exprs[0].expr {
+            LispExpr::List(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].expr, LispExpr::Symbol("apply".to_string()));
+                // Check #'+ became +
+                assert_eq!(items[1].expr, LispExpr::Symbol("+".to_string()));
             }
             _ => panic!("Expected List"),
         }

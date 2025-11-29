@@ -98,10 +98,11 @@ impl Repl {
             return;
         }
 
+        // Create a fresh compiler with runtime context from the VM
+        // This allows the REPL to reference functions and globals from previous lines
         let mut fresh_compiler = Compiler::new();
-        for (name, bytecode) in &self.vm.functions {
-            fresh_compiler.functions.insert(name.clone(), bytecode.clone());
-        }
+        fresh_compiler.with_known_functions(self.vm.functions.keys());
+        fresh_compiler.with_known_globals(self.vm.global_vars.keys());
 
         let (new_functions, main_bytecode) = match fresh_compiler.compile_program(&exprs) {
             Ok(result) => result,

@@ -1,10 +1,10 @@
 ; Debug version of pattern matching to trace execution
 
-(defconst OP-PUSH 'push)
-(defconst OP-LOAD-ARG 'load-arg)
-(defconst OP-EQ 'eq)
-(defconst OP-JMP-IF-FALSE 'jmp-if-false)
-(defconst OP-RET 'ret)
+(def OP-PUSH 'push)
+(def OP-LOAD-ARG 'load-arg)
+(def OP-EQ 'eq)
+(def OP-JMP-IF-FALSE 'jmp-if-false)
+(def OP-RET 'ret)
 
 (defun make-instr-1 ((op) (cons op '())))
 (defun make-instr-2 ((op arg) (cons op (cons arg '()))))
@@ -83,13 +83,13 @@
 ; Test
 (print "=== Testing Pattern Matching Compilation ===")
 (print "")
-(defconst test-clauses '(((0) true) ((n) false)))
+(def test-clauses '(((0) true) ((n) false)))
 (print "Input clauses:")
 (print test-clauses)
 (print "")
 (print "Starting compilation...")
 (print "")
-(defconst result (compile-clauses-list test-clauses))
+(def result (compile-clauses-list test-clauses))
 (print "")
 (print "=== FINAL RESULT ===")
 (print result)

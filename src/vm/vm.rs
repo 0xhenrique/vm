@@ -134,6 +134,15 @@ impl VM {
         self.functions.insert("ceil".to_string(), vec![LoadArg(0), Ceil, Ret]);
         self.functions.insert("abs".to_string(), vec![LoadArg(0), Abs, Ret]);
         self.functions.insert("pow".to_string(), vec![LoadArg(0), LoadArg(1), Pow, Ret]);
+
+        // Metaprogramming
+        self.functions.insert("eval".to_string(), vec![LoadArg(0), Eval, Ret]);
+
+        // Reflection - Function Introspection
+        self.functions.insert("function-arity".to_string(), vec![LoadArg(0), FunctionArity, Ret]);
+        self.functions.insert("function-params".to_string(), vec![LoadArg(0), FunctionParams, Ret]);
+        self.functions.insert("closure-captured".to_string(), vec![LoadArg(0), ClosureCaptured, Ret]);
+        self.functions.insert("function-name".to_string(), vec![LoadArg(0), FunctionName, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -1959,6 +1968,209 @@ impl VM {
                     }
                 };
                 self.value_stack.push(Value::Float(base_f.powf(exp_f)));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Eval => {
+                let code = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eval".to_string()))?;
+                match code {
+                    Value::String(source) => {
+                        // Parse the code
+                        let mut parser = Parser::new(&source);
+                        let exprs = parser.parse_all().map_err(|e| {
+                            RuntimeError::new(format!("'eval' failed to parse code: {}", e))
+                        })?;
+
+                        // Compile the code with runtime context
+                        // This allows eval'd code to reference functions and globals from parent context
+                        let mut compiler = Compiler::new();
+                        compiler.with_known_functions(self.functions.keys());
+                        compiler.with_known_globals(self.global_vars.keys());
+                        let (functions, main) = compiler.compile_program(&exprs).map_err(|e| {
+                            RuntimeError::new(format!("'eval' failed to compile code: {}", e.message))
+                        })?;
+
+                        // Merge compiled functions into VM's function table
+                        self.functions.extend(functions);
+
+                        // Execute the compiled code
+                        // Save current state
+                        let saved_bytecode = std::mem::replace(&mut self.current_bytecode, main);
+                        let saved_ip = self.instruction_pointer;
+
+                        // Execute the eval'd code
+                        self.instruction_pointer = 0;
+                        while !self.halted && self.instruction_pointer < self.current_bytecode.len() {
+                            self.execute_one_instruction()?;
+                        }
+
+                        // Restore previous state
+                        self.current_bytecode = saved_bytecode;
+                        self.instruction_pointer = saved_ip;
+                        self.halted = false;
+
+                        // The result is already on the stack from the eval'd code
+                        // If nothing was pushed, push nil (empty list)
+                        if self.value_stack.is_empty() {
+                            self.value_stack.push(Value::List(vec![]));
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'eval' expects a string, got {}",
+                            Self::type_name(&code)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            // Reflection - Function Introspection
+            Instruction::FunctionArity => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FunctionArity".to_string()))?;
+                let arity = match &value {
+                    Value::Function(name) => {
+                        // For built-in or user-defined functions, we need to inspect the bytecode
+                        if let Some(bytecode) = self.functions.get(name) {
+                            // Look for PackRestArgs (variadic), CheckArity (explicit), or count LoadArg
+                            let mut max_arg_index: Option<usize> = None;
+                            let mut is_variadic = false;
+                            let mut has_check_arity = false;
+
+                            for instr in bytecode {
+                                match instr {
+                                    Instruction::CheckArity(n, _) => {
+                                        // Explicit arity check - this is the arity
+                                        max_arg_index = Some(*n);
+                                        has_check_arity = true;
+                                        break;
+                                    }
+                                    Instruction::PackRestArgs(n) => {
+                                        // Variadic function - n is the number of required params
+                                        is_variadic = true;
+                                        max_arg_index = Some(*n);
+                                        break;
+                                    }
+                                    Instruction::LoadArg(idx) => {
+                                        // Track the highest argument index
+                                        max_arg_index = Some(max_arg_index.map_or(*idx, |m| m.max(*idx)));
+                                    }
+                                    _ => {}
+                                }
+                            }
+
+                            if is_variadic {
+                                -1 // -1 indicates variadic
+                            } else if let Some(idx) = max_arg_index {
+                                if has_check_arity {
+                                    idx as i64 // CheckArity already has the arity count
+                                } else {
+                                    (idx + 1) as i64 // LoadArg index -> arity is index + 1
+                                }
+                            } else {
+                                0 // No arguments
+                            }
+                        } else {
+                            return Err(RuntimeError::new(format!("Unknown function: {}", name)));
+                        }
+                    }
+                    Value::Closure { params, rest_param, .. } => {
+                        if rest_param.is_some() {
+                            -1 // Variadic closure
+                        } else {
+                            params.len() as i64
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'function-arity' expects a function or closure, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Integer(arity));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FunctionParams => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FunctionParams".to_string()))?;
+                match value {
+                    Value::Closure { params, rest_param, .. } => {
+                        let mut param_values: Vec<Value> = params.iter()
+                            .map(|p| Value::String(p.clone()))
+                            .collect();
+
+                        // If there's a rest parameter, add it with a dotted notation indicator
+                        if let Some(rest) = rest_param {
+                            param_values.push(Value::String(format!(". {}", rest)));
+                        }
+
+                        self.value_stack.push(Value::List(param_values));
+                    }
+                    Value::Function(name) => {
+                        // For named functions, we can't easily extract parameter names from bytecode
+                        // Return empty list or error
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'function-params' only works with closures, not named functions. Got function '{}'",
+                            name
+                        )));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'function-params' expects a closure, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::ClosureCaptured => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ClosureCaptured".to_string()))?;
+                match value {
+                    Value::Closure { captured, .. } => {
+                        // Return list of (name, value) pairs
+                        let captured_pairs: Vec<Value> = captured.iter()
+                            .map(|(name, val)| {
+                                Value::List(vec![
+                                    Value::String(name.clone()),
+                                    val.clone()
+                                ])
+                            })
+                            .collect();
+                        self.value_stack.push(Value::List(captured_pairs));
+                    }
+                    Value::Function(_) => {
+                        // Named functions don't have captured variables
+                        self.value_stack.push(Value::List(vec![]));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'closure-captured' expects a function or closure, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FunctionName => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FunctionName".to_string()))?;
+                match value {
+                    Value::Function(name) => {
+                        self.value_stack.push(Value::String(name));
+                    }
+                    Value::Closure { .. } => {
+                        return Err(RuntimeError::new(
+                            "Type error: 'function-name' expects a named function, not a closure".to_string()
+                        ));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'function-name' expects a function, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
                 self.instruction_pointer += 1;
             }
         }

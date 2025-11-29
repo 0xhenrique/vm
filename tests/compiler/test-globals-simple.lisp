@@ -1,11 +1,11 @@
 ; Simple test of global variables with comments!
 
 ; Define constants
-(defconst PI 3)
-(defconst MAX 100)
+(def PI 3)
+(def MAX 100)
 
 ; Define variables
-(defvar age 35)
+(def age 35)
 
 ; Test access
 (print PI)

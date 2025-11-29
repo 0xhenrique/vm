@@ -66,6 +66,8 @@ pub struct Compiler {
     pub functions: HashMap<String, Vec<Instruction>>,
     macros: HashMap<String, MacroDef>, // Macro definitions
     global_vars: HashMap<String, bool>, // Track global variables (value is mutable flag)
+    known_functions: std::collections::HashSet<String>, // Functions known from runtime context (for eval)
+    known_globals: std::collections::HashSet<String>, // Globals known from runtime context (for eval)
     instruction_address: usize,
     param_names: Vec<String>, // Track parameter names for LoadArg
     pattern_bindings: HashMap<String, ValueLocation>, // Track pattern match bindings
@@ -82,12 +84,36 @@ impl Compiler {
             functions: HashMap::new(),
             macros: HashMap::new(),
             global_vars: HashMap::new(),
+            known_functions: std::collections::HashSet::new(),
+            known_globals: std::collections::HashSet::new(),
             instruction_address: 0,
             param_names: Vec::new(),
             pattern_bindings: HashMap::new(),
             local_bindings: HashMap::new(),
             stack_depth: 0,
             in_tail_position: false,
+        }
+    }
+
+    // Inject known function names from runtime context (for eval)
+    // This allows eval'd code to reference functions defined in the parent context
+    pub fn with_known_functions<'a, I>(&mut self, function_names: I)
+    where
+        I: Iterator<Item = &'a String>,
+    {
+        for name in function_names {
+            self.known_functions.insert(name.clone());
+        }
+    }
+
+    // Inject known global variable names from runtime context (for eval)
+    // This allows eval'd code to reference globals defined in the parent context
+    pub fn with_known_globals<'a, I>(&mut self, global_names: I)
+    where
+        I: Iterator<Item = &'a String>,
+    {
+        for name in global_names {
+            self.known_globals.insert(name.clone());
         }
     }
 
@@ -140,11 +166,11 @@ impl Compiler {
                     } else if let Some(idx) = self.param_names.iter().position(|p| p == s) {
                         // Check if this symbol is a parameter
                         self.emit(Instruction::LoadArg(idx));
-                    } else if self.global_vars.contains_key(s) {
-                        // Check if this is a global variable
+                    } else if self.global_vars.contains_key(s) || self.known_globals.contains(s) {
+                        // Check if this is a global variable (defined or known from context)
                         self.emit(Instruction::LoadGlobal(s.clone()));
-                    } else if self.functions.contains_key(s) || Self::is_builtin_function(s) {
-                        // Check if this is a function name (user-defined or builtin)
+                    } else if self.functions.contains_key(s) || self.known_functions.contains(s) || Self::is_builtin_function(s) {
+                        // Check if this is a function name (user-defined, known from context, or builtin)
                         // Push it as a Function value so it can be passed around
                         self.emit(Instruction::Push(Value::Function(s.clone())));
                     } else {
@@ -1073,23 +1099,21 @@ impl Compiler {
         }
     }
 
-    fn compile_global_var(&mut self, expr: &SourceExpr, is_const: bool) -> Result<(), CompileError> {
+    fn compile_def(&mut self, expr: &SourceExpr) -> Result<(), CompileError> {
         let items = match &expr.expr {
             LispExpr::List(items) => items,
             _ => {
                 return Err(CompileError::new(
-                    format!("{} expects a list", if is_const { "defconst" } else { "defvar" }),
+                    "def expects a list".to_string(),
                     expr.location.clone(),
                 ));
             }
         };
 
-        // Check length: (defvar name value)
+        // Check length: (def name value)
         if items.len() != 3 {
             return Err(CompileError::new(
-                format!("{} expects exactly: ({} name value)",
-                    if is_const { "defconst" } else { "defvar" },
-                    if is_const { "defconst" } else { "defvar" }),
+                "def expects exactly: (def name value)".to_string(),
                 expr.location.clone(),
             ));
         }
@@ -1108,21 +1132,16 @@ impl Compiler {
             }
         };
 
-        // Check if variable already exists and enforce const semantics
-        if let Some(&is_mutable) = self.global_vars.get(&var_name) {
-            if !is_mutable {
-                // Trying to redefine a constant
-                return Err(CompileError::new(
-                    format!("Cannot redefine constant '{}'", var_name),
-                    items[1].location.clone(),
-                ));
-            }
-            // It's a mutable variable (defvar), allow redefinition with warning
-            // In the future, we could add a warning system here
+        // Enforce immutability - no redefinition allowed
+        if self.global_vars.contains_key(&var_name) {
+            return Err(CompileError::new(
+                format!("Cannot redefine constant '{}' - all bindings are immutable", var_name),
+                items[1].location.clone(),
+            ));
         }
 
-        // Register as global variable (flag: true if mutable, false if const)
-        self.global_vars.insert(var_name.clone(), !is_const);
+        // Register as immutable global variable (false = immutable)
+        self.global_vars.insert(var_name.clone(), false);
 
         // Compile the value expression
         self.compile_expr(&items[2])?;
@@ -2238,7 +2257,7 @@ impl Compiler {
 
 
     pub fn compile_program(&mut self, exprs: &[SourceExpr]) -> Result<(HashMap<String, Vec<Instruction>>, Vec<Instruction>), CompileError> {
-        // First pass: compile all defun, defmacro, defvar, and defconst expressions
+        // First pass: compile all defun, defmacro, and def expressions
         for expr in exprs {
             if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
@@ -2247,10 +2266,20 @@ impl Compiler {
                             self.compile_defun(expr)?;
                         } else if s == "defmacro" {
                             self.compile_defmacro(expr)?;
+                        } else if s == "def" {
+                            self.compile_def(expr)?;
                         } else if s == "defvar" {
-                            self.compile_global_var(expr, false)?;
+                            // defvar has been removed - provide helpful error
+                            return Err(CompileError::new(
+                                "'defvar' has been removed - use 'def' for immutable bindings".to_string(),
+                                expr.location.clone(),
+                            ));
                         } else if s == "defconst" {
-                            self.compile_global_var(expr, true)?;
+                            // defconst has been renamed - provide helpful error
+                            return Err(CompileError::new(
+                                "'defconst' has been renamed to 'def'".to_string(),
+                                expr.location.clone(),
+                            ));
                         }
                     }
                 }
@@ -2262,7 +2291,7 @@ impl Compiler {
             let is_definition = if let LispExpr::List(items) = &expr.expr {
                 if let Some(first) = items.first() {
                     if let LispExpr::Symbol(s) = &first.expr {
-                        s == "defun" || s == "defmacro" || s == "defvar" || s == "defconst"
+                        s == "defun" || s == "defmacro" || s == "def"
                     } else {
                         false
                     }
@@ -2310,6 +2339,9 @@ impl Compiler {
             "vector-length" |
             // Type conversions
             "list->vector" | "vector->list" |
+            // Metaprogramming & Reflection
+            "eval" |
+            "function-arity" | "function-params" | "closure-captured" | "function-name" |
             // Other
             "get-args" | "print"
         )
