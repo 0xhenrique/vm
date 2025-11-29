@@ -1,0 +1,31 @@
+; Test is-symbol-char?
+
+(defun is-letter? (c)
+  (let ((n (char-code c)))
+    (or (and (>= n 65) (<= n 90))
+        (and (>= n 97) (<= n 122)))))
+
+(defun is-digit? (c)
+  (let ((n (char-code c)))
+    (and (>= n 48) (<= n 57))))
+
+(defun is-symbol-char? (c)
+  (let ((n (char-code c)))
+    (or (is-letter? c)
+        (is-digit? c)
+        (== n 43)
+        (== n 45)
+        (== n 42)
+        (== n 47)
+        (== n 60)
+        (== n 62)
+        (== n 61)
+        (== n 33)
+        (== n 63)
+        (== n 95))))
+
+(print "Testing is-symbol-char?:")
+(print (is-symbol-char? "+"))
+(print (is-symbol-char? "a"))
+(print (is-symbol-char? "5"))
+(print (is-symbol-char? " "))
