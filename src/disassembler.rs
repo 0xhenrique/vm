@@ -144,6 +144,19 @@ fn format_instruction(instr: &Instruction) -> String {
             format!("MakeVariadicClosure({:?} . {}, {} instrs, {} captured)",
                     params, rest_param, body.len(), num_captured)
         }
+        // Float type predicates and conversions
+        Instruction::IsFloat => "IsFloat".to_string(),
+        Instruction::IsNumber => "IsNumber".to_string(),
+        Instruction::IntToFloat => "IntToFloat".to_string(),
+        Instruction::FloatToInt => "FloatToInt".to_string(),
+        // Math functions
+        Instruction::Sqrt => "Sqrt".to_string(),
+        Instruction::Sin => "Sin".to_string(),
+        Instruction::Cos => "Cos".to_string(),
+        Instruction::Floor => "Floor".to_string(),
+        Instruction::Ceil => "Ceil".to_string(),
+        Instruction::Abs => "Abs".to_string(),
+        Instruction::Pow => "Pow".to_string(),
     }
 }
 

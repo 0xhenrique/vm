@@ -1,9 +1,10 @@
 use super::instructions::Instruction;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Value {
     Integer(i64),
+    Float(f64),
     Boolean(bool),
     List(Vec<Value>),
     Symbol(String),
@@ -19,9 +20,46 @@ pub enum Value {
     Vector(Vec<Value>), // Efficient array with O(1) indexed access
 }
 
+// Custom PartialEq to handle NaN in floats
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => {
+                // NaN != NaN, but we treat them as equal for Value comparison
+                if a.is_nan() && b.is_nan() {
+                    true
+                } else {
+                    a == b
+                }
+            }
+            (Value::Boolean(a), Value::Boolean(b)) => a == b,
+            (Value::List(a), Value::List(b)) => a == b,
+            (Value::Symbol(a), Value::Symbol(b)) => a == b,
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Function(a), Value::Function(b)) => a == b,
+            (Value::HashMap(a), Value::HashMap(b)) => a == b,
+            (Value::Vector(a), Value::Vector(b)) => a == b,
+            (Value::Closure { params: p1, rest_param: r1, body: b1, captured: c1 },
+             Value::Closure { params: p2, rest_param: r2, body: b2, captured: c2 }) => {
+                p1 == p2 && r1 == r2 && b1 == b2 && c1 == c2
+            }
+            _ => false,
+        }
+    }
+}
+
 impl Value {
     pub fn is_int(&self) -> bool {
         matches!(self, Value::Integer(_))
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Value::Float(_))
+    }
+
+    pub fn is_number(&self) -> bool {
+        matches!(self, Value::Integer(_) | Value::Float(_))
     }
 
     pub fn is_bool(&self) -> bool {
@@ -51,6 +89,14 @@ impl Value {
     pub fn as_int(&self) -> Option<i64> {
         if let Value::Integer(n) = self {
             Some(*n)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_float(&self) -> Option<f64> {
+        if let Value::Float(f) = self {
+            Some(*f)
         } else {
             None
         }

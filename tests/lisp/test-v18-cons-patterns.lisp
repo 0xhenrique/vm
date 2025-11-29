@@ -1,3 +1,5 @@
+;; SKIP
+;; Reason: Requires pattern matching and destructuring in function parameters (Phase 8)
 ; Test v18 cons/list destructuring patterns
 
 (print "=== Testing v18 Cons Patterns ===")

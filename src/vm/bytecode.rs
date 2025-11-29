@@ -310,6 +310,19 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
             // Write num_captured
             write_u32(bytes, *num_captured as u32);
         }
+        // Float type predicates and conversions (81-84)
+        Instruction::IsFloat => bytes.push(81),
+        Instruction::IsNumber => bytes.push(82),
+        Instruction::IntToFloat => bytes.push(83),
+        Instruction::FloatToInt => bytes.push(84),
+        // Math functions (85-91)
+        Instruction::Sqrt => bytes.push(85),
+        Instruction::Sin => bytes.push(86),
+        Instruction::Cos => bytes.push(87),
+        Instruction::Floor => bytes.push(88),
+        Instruction::Ceil => bytes.push(89),
+        Instruction::Abs => bytes.push(90),
+        Instruction::Pow => bytes.push(91),
     }
 }
 
@@ -450,6 +463,19 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         78 => Ok(Instruction::Apply),
         79 => Ok(Instruction::LoadFile),
         80 => Ok(Instruction::RequireFile),
+        // Float type predicates and conversions (81-84)
+        81 => Ok(Instruction::IsFloat),
+        82 => Ok(Instruction::IsNumber),
+        83 => Ok(Instruction::IntToFloat),
+        84 => Ok(Instruction::FloatToInt),
+        // Math functions (85-91)
+        85 => Ok(Instruction::Sqrt),
+        86 => Ok(Instruction::Sin),
+        87 => Ok(Instruction::Cos),
+        88 => Ok(Instruction::Floor),
+        89 => Ok(Instruction::Ceil),
+        90 => Ok(Instruction::Abs),
+        91 => Ok(Instruction::Pow),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -463,6 +489,10 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
         Value::Boolean(b) => {
             bytes.push(1);
             bytes.push(if *b { 1 } else { 0 });
+        }
+        Value::Float(f) => {
+            bytes.push(9);
+            bytes.extend_from_slice(&f.to_le_bytes());
         }
         Value::List(items) => {
             bytes.push(2);
@@ -626,6 +656,24 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
                 vec.push(read_value(bytes, pos)?);
             }
             Ok(Value::Vector(vec))
+        }
+        9 => {
+            // Read Float
+            if *pos + 8 > bytes.len() {
+                return Err("Unexpected end of bytecode".to_string());
+            }
+            let f = f64::from_le_bytes([
+                bytes[*pos],
+                bytes[*pos + 1],
+                bytes[*pos + 2],
+                bytes[*pos + 3],
+                bytes[*pos + 4],
+                bytes[*pos + 5],
+                bytes[*pos + 6],
+                bytes[*pos + 7],
+            ]);
+            *pos += 8;
+            Ok(Value::Float(f))
         }
         _ => Err(format!("Unknown value tag: {}", tag)),
     }

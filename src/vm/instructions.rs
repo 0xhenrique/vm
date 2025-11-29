@@ -40,6 +40,8 @@ pub enum Instruction {
     IsList,  // Pop value, push boolean indicating if it's a list
     // Type predicates
     IsInteger,      // Pop value, push boolean indicating if it's an integer
+    IsFloat,        // Pop value, push boolean indicating if it's a float
+    IsNumber,       // Pop value, push boolean indicating if it's a number (int or float)
     IsBoolean,      // Pop value, push boolean indicating if it's a boolean
     IsFunction,     // Pop value, push boolean indicating if it's a function
     IsClosure,      // Pop value, push boolean indicating if it's a closure
@@ -94,4 +96,14 @@ pub enum Instruction {
     // Type conversions
     ListToVector,        // Pop list, push vector with same elements
     VectorToList,        // Pop vector, push list with same elements
+    IntToFloat,          // Pop integer, push float
+    FloatToInt,          // Pop float, push integer (truncate towards zero)
+    // Math functions
+    Sqrt,                // Pop number, push square root as float
+    Sin,                 // Pop number, push sine as float
+    Cos,                 // Pop number, push cosine as float
+    Floor,               // Pop number, push floor as integer
+    Ceil,                // Pop number, push ceiling as integer
+    Abs,                 // Pop number, push absolute value (same type)
+    Pow,                 // Pop base and exponent, push power as float
 }

@@ -1,3 +1,5 @@
+;; EXPECT-ERROR: compile
+;; This test expects a compile error when attempting to redefine a constant
 ; Test that redefining a constant produces an error
 
 (print "Defining constant...")

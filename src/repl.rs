@@ -142,6 +142,14 @@ impl Repl {
     pub fn format_value(&self, value: &Value) -> String {
         match value {
             Value::Integer(n) => n.to_string(),
+            Value::Float(f) => {
+                // Format float nicely - show decimal point even for whole numbers
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{}.0", f)
+                } else {
+                    f.to_string()
+                }
+            }
             Value::Boolean(b) => b.to_string(),
             Value::List(items) => {
                 let formatted_items: Vec<String> = items

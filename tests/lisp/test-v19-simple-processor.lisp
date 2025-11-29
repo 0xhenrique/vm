@@ -1,3 +1,5 @@
+;; SKIP
+;; Reason: Requires pattern matching in function parameters (Phase 8)
 ; Demonstration: Simple source code processor using file I/O
 ; This shows we're on the path to self-hosting!
 

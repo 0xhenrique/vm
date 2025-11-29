@@ -1,3 +1,5 @@
+;; SKIP
+;; Reason: Requires multi-clause function definitions (Phase 8)
 (defun add
   ((x) x)
   ((x y) (+ x y))

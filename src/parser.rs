@@ -93,6 +93,20 @@ impl Parser {
             // This is a temporary hack, there should be a String variant to LispExpr
             // for simplicity, just a special symbol so the compiler can recognise
             Ok(SourceExpr::new(LispExpr::Symbol(format!("__STRING__{}", string_content)), location))
+        } else if token.text.contains('.') || token.text.contains('e') || token.text.contains('E') {
+            // Try parsing as float (contains decimal point or scientific notation)
+            if let Ok(f) = token.text.parse::<f64>() {
+                self.pos += 1;
+                Ok(SourceExpr::new(LispExpr::Float(f), location))
+            } else if let Ok(n) = token.text.parse::<i64>() {
+                // Fallback to integer if float parsing fails
+                self.pos += 1;
+                Ok(SourceExpr::new(LispExpr::Number(n), location))
+            } else {
+                let symbol = token.text.clone();
+                self.pos += 1;
+                Ok(SourceExpr::new(LispExpr::Symbol(symbol), location))
+            }
         } else if let Ok(n) = token.text.parse::<i64>() {
             self.pos += 1;
             Ok(SourceExpr::new(LispExpr::Number(n), location))

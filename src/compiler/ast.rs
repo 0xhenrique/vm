@@ -3,6 +3,7 @@ use crate::vm::errors::Location;
 #[derive(Debug, Clone, PartialEq)]
 pub enum LispExpr {
     Number(i64),
+    Float(f64),
     Boolean(bool),
     Symbol(String),
     List(Vec<SourceExpr>),
@@ -33,6 +34,11 @@ impl SourceExpr {
 #[allow(dead_code)]
 pub fn number(n: i64) -> SourceExpr {
     SourceExpr::unknown(LispExpr::Number(n))
+}
+
+#[allow(dead_code)]
+pub fn float(f: f64) -> SourceExpr {
+    SourceExpr::unknown(LispExpr::Float(f))
 }
 
 #[allow(dead_code)]

@@ -25,6 +25,13 @@ fn compile_and_run(source: &str) -> Result<String, String> {
 fn format_value(value: &Value) -> String {
     match value {
         Value::Integer(n) => n.to_string(),
+        Value::Float(f) => {
+            if f.fract() == 0.0 && !f.is_nan() && !f.is_infinite() {
+                format!("{:.1}", f)
+            } else {
+                f.to_string()
+            }
+        }
         Value::Boolean(b) => b.to_string(),
         Value::List(items) => {
             let formatted_items: Vec<String> = items.iter().map(|v| format_value(v)).collect();

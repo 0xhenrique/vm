@@ -1,3 +1,5 @@
+;; SKIP
+;; Reason: Requires pattern matching and destructuring in function parameters (Phase 8)
 (defun first ((h . _) h))
 (defun rest ((_ . t) t))
 

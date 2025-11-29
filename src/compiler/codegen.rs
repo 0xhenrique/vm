@@ -107,6 +107,9 @@ impl Compiler {
             LispExpr::Number(n) => {
                 self.emit(Instruction::Push(Value::Integer(*n)));
             }
+            LispExpr::Float(f) => {
+                self.emit(Instruction::Push(Value::Float(*f)));
+            }
             LispExpr::Boolean(b) => {
                 self.emit(Instruction::Push(Value::Boolean(*b)));
             }
@@ -1034,6 +1037,7 @@ impl Compiler {
     fn expr_to_value(&self, expr: &SourceExpr) -> Result<Value, CompileError> {
         match &expr.expr {
             LispExpr::Number(n) => Ok(Value::Integer(*n)),
+            LispExpr::Float(f) => Ok(Value::Float(*f)),
             LispExpr::Boolean(b) => Ok(Value::Boolean(*b)),
             LispExpr::Symbol(s) => {
                 // Symbols in quoted expressions become Symbol values
@@ -1538,6 +1542,7 @@ impl Compiler {
     fn value_to_expr(&self, value: &Value) -> Result<SourceExpr, CompileError> {
         match value {
             Value::Integer(n) => Ok(SourceExpr::unknown(LispExpr::Number(*n))),
+            Value::Float(f) => Ok(SourceExpr::unknown(LispExpr::Float(*f))),
             Value::Boolean(b) => Ok(SourceExpr::unknown(LispExpr::Boolean(*b))),
             Value::Symbol(s) => Ok(SourceExpr::unknown(LispExpr::Symbol(s.clone()))),
             Value::String(s) => {

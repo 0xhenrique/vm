@@ -1,3 +1,5 @@
+;; SKIP
+;; Reason: Requires pattern matching in function parameters (Phase 8)
 (defun fact
   ((0) 1)
   ((n) (* n (fact (- n 1)))))

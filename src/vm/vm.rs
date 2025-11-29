@@ -70,11 +70,12 @@ impl VM {
 
         // Type predicates
         self.functions.insert("integer?".to_string(), vec![LoadArg(0), IsInteger, Ret]);
+        self.functions.insert("float?".to_string(), vec![LoadArg(0), IsFloat, Ret]);
+        self.functions.insert("number?".to_string(), vec![LoadArg(0), IsNumber, Ret]); // int or float
         self.functions.insert("boolean?".to_string(), vec![LoadArg(0), IsBoolean, Ret]);
         self.functions.insert("function?".to_string(), vec![LoadArg(0), IsFunction, Ret]);
         self.functions.insert("closure?".to_string(), vec![LoadArg(0), IsClosure, Ret]);
         self.functions.insert("procedure?".to_string(), vec![LoadArg(0), IsProcedure, Ret]);
-        self.functions.insert("number?".to_string(), vec![LoadArg(0), IsInteger, Ret]); // Alias for integer? since we only have integers
 
         // String operations
         self.functions.insert("string?".to_string(), vec![LoadArg(0), IsString, Ret]);
@@ -122,6 +123,17 @@ impl VM {
         // Type conversions
         self.functions.insert("list->vector".to_string(), vec![LoadArg(0), ListToVector, Ret]);
         self.functions.insert("vector->list".to_string(), vec![LoadArg(0), VectorToList, Ret]);
+        self.functions.insert("int->float".to_string(), vec![LoadArg(0), IntToFloat, Ret]);
+        self.functions.insert("float->int".to_string(), vec![LoadArg(0), FloatToInt, Ret]);
+
+        // Math functions
+        self.functions.insert("sqrt".to_string(), vec![LoadArg(0), Sqrt, Ret]);
+        self.functions.insert("sin".to_string(), vec![LoadArg(0), Sin, Ret]);
+        self.functions.insert("cos".to_string(), vec![LoadArg(0), Cos, Ret]);
+        self.functions.insert("floor".to_string(), vec![LoadArg(0), Floor, Ret]);
+        self.functions.insert("ceil".to_string(), vec![LoadArg(0), Ceil, Ret]);
+        self.functions.insert("abs".to_string(), vec![LoadArg(0), Abs, Ret]);
+        self.functions.insert("pow".to_string(), vec![LoadArg(0), LoadArg(1), Pow, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -144,9 +156,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x + y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(x + y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(*x as f64 + y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Float(x + *y as f64));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '+' expects two integers, got {} and {}",
+                            "Type error: '+' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -161,9 +182,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x - y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(x - y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(*x as f64 - y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Float(x - *y as f64));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '-' expects two integers, got {} and {}",
+                            "Type error: '-' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -178,9 +208,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Integer(x * y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(x * y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Float(*x as f64 * y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Float(x * *y as f64));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '*' expects two integers, got {} and {}",
+                            "Type error: '*' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -198,9 +237,27 @@ impl VM {
                         }
                         self.value_stack.push(Value::Integer(x / y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        if *y == 0.0 {
+                            return Err(RuntimeError::new("Division by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float(x / y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        if *y == 0.0 {
+                            return Err(RuntimeError::new("Division by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float(*x as f64 / y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        if *y == 0 {
+                            return Err(RuntimeError::new("Division by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float(x / *y as f64));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '/' expects two integers, got {} and {}",
+                            "Type error: '/' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -218,9 +275,27 @@ impl VM {
                         }
                         self.value_stack.push(Value::Integer(x % y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        if *y == 0.0 {
+                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float(x % y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        if *y == 0.0 {
+                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float((*x as f64) % y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        if *y == 0 {
+                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                        }
+                        self.value_stack.push(Value::Float(x % (*y as f64)));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '%' expects two integers, got {} and {}",
+                            "Type error: '%' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -234,9 +309,12 @@ impl VM {
                     Value::Integer(x) => {
                         self.value_stack.push(Value::Integer(-x));
                     }
+                    Value::Float(x) => {
+                        self.value_stack.push(Value::Float(-x));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: 'neg' expects an integer, got {}",
+                            "Type error: 'neg' expects a number, got {}",
                             Self::type_name(&a)
                         )));
                     }
@@ -250,9 +328,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x <= y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean(x <= y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean((*x as f64) <= *y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(*x <= (*y as f64)));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '<=' expects two integers, got {} and {}",
+                            "Type error: '<=' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -267,9 +354,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x < y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean(x < y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean((*x as f64) < *y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(*x < (*y as f64)));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '<' expects two integers, got {} and {}",
+                            "Type error: '<' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -284,9 +380,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x > y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean(x > y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean((*x as f64) > *y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(*x > (*y as f64)));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '>' expects two integers, got {} and {}",
+                            "Type error: '>' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -301,9 +406,18 @@ impl VM {
                     (Value::Integer(x), Value::Integer(y)) => {
                         self.value_stack.push(Value::Boolean(x >= y));
                     }
+                    (Value::Float(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean(x >= y));
+                    }
+                    (Value::Integer(x), Value::Float(y)) => {
+                        self.value_stack.push(Value::Boolean((*x as f64) >= *y));
+                    }
+                    (Value::Float(x), Value::Integer(y)) => {
+                        self.value_stack.push(Value::Boolean(*x >= (*y as f64)));
+                    }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: '>=' expects two integers, got {} and {}",
+                            "Type error: '>=' expects two numbers, got {} and {}",
                             Self::type_name(&a),
                             Self::type_name(&b)
                         )));
@@ -314,15 +428,29 @@ impl VM {
             Instruction::Eq => {
                 let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eq operation".to_string()))?;
                 let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Eq operation".to_string()))?;
-                // Use PartialEq to compare all value types
-                self.value_stack.push(Value::Boolean(a == b));
+                // Handle numeric type coercion for equality
+                let result = match (&a, &b) {
+                    (Value::Integer(x), Value::Integer(y)) => x == y,
+                    (Value::Float(x), Value::Float(y)) => x == y,
+                    (Value::Integer(x), Value::Float(y)) => *x as f64 == *y,
+                    (Value::Float(x), Value::Integer(y)) => *x == *y as f64,
+                    _ => a == b, // For non-numeric types, use standard PartialEq
+                };
+                self.value_stack.push(Value::Boolean(result));
                 self.instruction_pointer += 1;
             }
             Instruction::Neq => {
                 let b = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Neq operation".to_string()))?;
                 let a = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Neq operation".to_string()))?;
-                // Use PartialEq to compare all value types
-                self.value_stack.push(Value::Boolean(a != b));
+                // Handle numeric type coercion for inequality
+                let result = match (&a, &b) {
+                    (Value::Integer(x), Value::Integer(y)) => x != y,
+                    (Value::Float(x), Value::Float(y)) => x != y,
+                    (Value::Integer(x), Value::Float(y)) => *x as f64 != *y,
+                    (Value::Float(x), Value::Integer(y)) => *x != *y as f64,
+                    _ => a != b, // For non-numeric types, use standard PartialEq
+                };
+                self.value_stack.push(Value::Boolean(result));
                 self.instruction_pointer += 1;
             }
             Instruction::Jmp(addr) => {
@@ -800,6 +928,18 @@ impl VM {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsInteger".to_string()))?;
                 let is_integer = matches!(value, Value::Integer(_));
                 self.value_stack.push(Value::Boolean(is_integer));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsFloat => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsFloat".to_string()))?;
+                let is_float = matches!(value, Value::Float(_));
+                self.value_stack.push(Value::Boolean(is_float));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsNumber => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsNumber".to_string()))?;
+                let is_number = matches!(value, Value::Integer(_) | Value::Float(_));
+                self.value_stack.push(Value::Boolean(is_number));
                 self.instruction_pointer += 1;
             }
             Instruction::IsBoolean => {
@@ -1670,6 +1810,157 @@ impl VM {
                 }
                 self.instruction_pointer += 1;
             }
+            Instruction::IntToFloat => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IntToFloat".to_string()))?;
+                match value {
+                    Value::Integer(n) => {
+                        self.value_stack.push(Value::Float(n as f64));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'int->float' expects an integer, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::FloatToInt => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in FloatToInt".to_string()))?;
+                match value {
+                    Value::Float(f) => {
+                        self.value_stack.push(Value::Integer(f as i64));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'float->int' expects a float, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Sqrt => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Sqrt".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'sqrt' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.sqrt()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Sin => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Sin".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'sin' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.sin()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Cos => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Cos".to_string()))?;
+                let f = match value {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'cos' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(f.cos()));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Floor => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Floor".to_string()))?;
+                let result = match value {
+                    Value::Float(f) => f.floor() as i64,
+                    Value::Integer(n) => n,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'floor' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Integer(result));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Ceil => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Ceil".to_string()))?;
+                let result = match value {
+                    Value::Float(f) => f.ceil() as i64,
+                    Value::Integer(n) => n,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'ceil' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Integer(result));
+                self.instruction_pointer += 1;
+            }
+            Instruction::Abs => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Abs".to_string()))?;
+                match value {
+                    Value::Integer(n) => {
+                        self.value_stack.push(Value::Integer(n.abs()));
+                    }
+                    Value::Float(f) => {
+                        self.value_stack.push(Value::Float(f.abs()));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'abs' expects a number, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Pow => {
+                let exponent = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Pow".to_string()))?;
+                let base = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Pow".to_string()))?;
+                let base_f = match base {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'pow' expects numbers, got {} and {}",
+                            Self::type_name(&base),
+                            Self::type_name(&exponent)
+                        )));
+                    }
+                };
+                let exp_f = match exponent {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'pow' expects numbers, got {} and {}",
+                            Self::type_name(&base),
+                            Self::type_name(&exponent)
+                        )));
+                    }
+                };
+                self.value_stack.push(Value::Float(base_f.powf(exp_f)));
+                self.instruction_pointer += 1;
+            }
         }
 
         Ok(())
@@ -1678,6 +1969,7 @@ impl VM {
     fn type_name(value: &Value) -> &str {
         match value {
             Value::Integer(_) => "integer",
+            Value::Float(_) => "float",
             Value::Boolean(_) => "boolean",
             Value::List(_) => "list",
             Value::Symbol(_) => "symbol",
@@ -1692,6 +1984,14 @@ impl VM {
     fn format_value(value: &Value) -> String {
         match value {
             Value::Integer(n) => n.to_string(),
+            Value::Float(f) => {
+                // Format float nicely - show decimal point even for whole numbers
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{}.0", f)
+                } else {
+                    f.to_string()
+                }
+            }
             Value::Boolean(b) => b.to_string(),
             Value::List(items) => {
                 let formatted_items: Vec<String> = items
