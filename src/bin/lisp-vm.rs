@@ -29,7 +29,10 @@ fn main() {
 
     // Execute bytecode on the VM
     let mut vm = VM::new();
-    vm.functions = functions;
+    // Merge user-defined functions with builtins (don't overwrite builtins)
+    for (name, bytecode) in functions {
+        vm.functions.insert(name, bytecode);
+    }
     vm.current_bytecode = main_bytecode;
 
     // Pass command-line arguments to the VM (skip program name and bytecode file)

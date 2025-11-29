@@ -109,6 +109,32 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::ListRef => "ListRef".to_string(),
         Instruction::ListLength => "ListLength".to_string(),
         Instruction::NumberToString => "NumberToString".to_string(),
+        // HashMap operations
+        Instruction::MakeHashMap(n) => format!("MakeHashMap({})", n),
+        Instruction::HashMapGet => "HashMapGet".to_string(),
+        Instruction::HashMapSet => "HashMapSet".to_string(),
+        Instruction::HashMapKeys => "HashMapKeys".to_string(),
+        Instruction::HashMapValues => "HashMapValues".to_string(),
+        Instruction::HashMapContainsKey => "HashMapContainsKey".to_string(),
+        Instruction::IsHashMap => "IsHashMap".to_string(),
+        // Vector operations
+        Instruction::MakeVector(n) => format!("MakeVector({})", n),
+        Instruction::VectorGet => "VectorGet".to_string(),
+        Instruction::VectorSet => "VectorSet".to_string(),
+        Instruction::VectorPush => "VectorPush".to_string(),
+        Instruction::VectorPop => "VectorPop".to_string(),
+        Instruction::VectorLength => "VectorLength".to_string(),
+        Instruction::IsVector => "IsVector".to_string(),
+        // Type predicates
+        Instruction::IsInteger => "IsInteger".to_string(),
+        Instruction::IsBoolean => "IsBoolean".to_string(),
+        Instruction::IsFunction => "IsFunction".to_string(),
+        Instruction::IsClosure => "IsClosure".to_string(),
+        Instruction::IsProcedure => "IsProcedure".to_string(),
+        // Type conversions
+        Instruction::StringToNumber => "StringToNumber".to_string(),
+        Instruction::ListToVector => "ListToVector".to_string(),
+        Instruction::VectorToList => "VectorToList".to_string(),
     }
 }
 

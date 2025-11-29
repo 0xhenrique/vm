@@ -16,8 +16,8 @@ pub fn serialize_bytecode(
     // Magic number: "LISP" in ASCII
     bytes.extend_from_slice(b"LISP");
 
-    // Version: 6 (added TailCall instruction for tail call optimization)
-    bytes.push(6);
+    // Version: 7 (added HashMap and Vector support)
+    bytes.push(7);
 
     // Serialize functions
     write_u32(&mut bytes, functions.len() as u32);
@@ -43,8 +43,8 @@ pub fn deserialize_bytecode(bytes: &[u8]) -> Result<(HashMap<String, Vec<Instruc
 
     // Check version
     let version = bytes[pos];
-    if version != 6 {
-        return Err(format!("Unsupported bytecode version: {} (expected 6)", version));
+    if version != 7 {
+        return Err(format!("Unsupported bytecode version: {} (expected 7)", version));
     }
     pos += 1;
 
@@ -247,6 +247,38 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::ListRef => bytes.push(51),
         Instruction::ListLength => bytes.push(52),
         Instruction::NumberToString => bytes.push(53),
+        // HashMap operations (54-60)
+        Instruction::MakeHashMap(n) => {
+            bytes.push(54);
+            write_u32(bytes, *n as u32);
+        }
+        Instruction::HashMapGet => bytes.push(55),
+        Instruction::HashMapSet => bytes.push(56),
+        Instruction::HashMapKeys => bytes.push(57),
+        Instruction::HashMapValues => bytes.push(58),
+        Instruction::HashMapContainsKey => bytes.push(59),
+        Instruction::IsHashMap => bytes.push(60),
+        // Vector operations (61-67)
+        Instruction::MakeVector(n) => {
+            bytes.push(61);
+            write_u32(bytes, *n as u32);
+        }
+        Instruction::VectorGet => bytes.push(62),
+        Instruction::VectorSet => bytes.push(63),
+        Instruction::VectorPush => bytes.push(64),
+        Instruction::VectorPop => bytes.push(65),
+        Instruction::VectorLength => bytes.push(66),
+        Instruction::IsVector => bytes.push(67),
+        // Type predicates (68-72)
+        Instruction::IsInteger => bytes.push(68),
+        Instruction::IsBoolean => bytes.push(69),
+        Instruction::IsFunction => bytes.push(70),
+        Instruction::IsClosure => bytes.push(71),
+        Instruction::IsProcedure => bytes.push(72),
+        // Type conversions (73-75)
+        Instruction::StringToNumber => bytes.push(73),
+        Instruction::ListToVector => bytes.push(74),
+        Instruction::VectorToList => bytes.push(75),
     }
 }
 
@@ -340,6 +372,32 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         51 => Ok(Instruction::ListRef),
         52 => Ok(Instruction::ListLength),
         53 => Ok(Instruction::NumberToString),
+        // HashMap operations (54-60)
+        54 => Ok(Instruction::MakeHashMap(read_u32(bytes, pos)? as usize)),
+        55 => Ok(Instruction::HashMapGet),
+        56 => Ok(Instruction::HashMapSet),
+        57 => Ok(Instruction::HashMapKeys),
+        58 => Ok(Instruction::HashMapValues),
+        59 => Ok(Instruction::HashMapContainsKey),
+        60 => Ok(Instruction::IsHashMap),
+        // Vector operations (61-67)
+        61 => Ok(Instruction::MakeVector(read_u32(bytes, pos)? as usize)),
+        62 => Ok(Instruction::VectorGet),
+        63 => Ok(Instruction::VectorSet),
+        64 => Ok(Instruction::VectorPush),
+        65 => Ok(Instruction::VectorPop),
+        66 => Ok(Instruction::VectorLength),
+        67 => Ok(Instruction::IsVector),
+        // Type predicates (68-72)
+        68 => Ok(Instruction::IsInteger),
+        69 => Ok(Instruction::IsBoolean),
+        70 => Ok(Instruction::IsFunction),
+        71 => Ok(Instruction::IsClosure),
+        72 => Ok(Instruction::IsProcedure),
+        // Type conversions (73-75)
+        73 => Ok(Instruction::StringToNumber),
+        74 => Ok(Instruction::ListToVector),
+        75 => Ok(Instruction::VectorToList),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -369,8 +427,12 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             bytes.push(4);
             write_string(bytes, s);
         }
-        Value::Closure { params, body, captured } => {
+        Value::Function(name) => {
             bytes.push(5);
+            write_string(bytes, name);
+        }
+        Value::Closure { params, body, captured } => {
+            bytes.push(6);
             // Write params
             write_u32(bytes, params.len() as u32);
             for param in params {
@@ -385,6 +447,25 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
             write_u32(bytes, captured.len() as u32);
             for (name, value) in captured {
                 write_string(bytes, name);
+                write_value(bytes, value);
+            }
+        }
+        Value::HashMap(map) => {
+            bytes.push(7);
+            // Write number of entries
+            write_u32(bytes, map.len() as u32);
+            // Write key-value pairs
+            for (key, value) in map {
+                write_string(bytes, key);
+                write_value(bytes, value);
+            }
+        }
+        Value::Vector(vec) => {
+            bytes.push(8);
+            // Write number of elements
+            write_u32(bytes, vec.len() as u32);
+            // Write elements
+            for value in vec {
                 write_value(bytes, value);
             }
         }
@@ -434,7 +515,8 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
         }
         3 => Ok(Value::Symbol(read_string(bytes, pos)?)),
         4 => Ok(Value::String(read_string(bytes, pos)?)),
-        5 => {
+        5 => Ok(Value::Function(read_string(bytes, pos)?)),
+        6 => {
             // Read params
             let params_len = read_u32(bytes, pos)? as usize;
             let mut params = Vec::new();
@@ -456,6 +538,26 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
                 captured.push((name, value));
             }
             Ok(Value::Closure { params, body, captured })
+        }
+        7 => {
+            // Read HashMap
+            let len = read_u32(bytes, pos)? as usize;
+            let mut map = HashMap::new();
+            for _ in 0..len {
+                let key = read_string(bytes, pos)?;
+                let value = read_value(bytes, pos)?;
+                map.insert(key, value);
+            }
+            Ok(Value::HashMap(map))
+        }
+        8 => {
+            // Read Vector
+            let len = read_u32(bytes, pos)? as usize;
+            let mut vec = Vec::new();
+            for _ in 0..len {
+                vec.push(read_value(bytes, pos)?);
+            }
+            Ok(Value::Vector(vec))
         }
         _ => Err(format!("Unknown value tag: {}", tag)),
     }

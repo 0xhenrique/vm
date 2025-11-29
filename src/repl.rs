@@ -152,8 +152,23 @@ impl Repl {
             }
             Value::Symbol(s) => s.clone(),
             Value::String(s) => format!("\"{}\"", s),
+            Value::Function(name) => format!("<function {}>", name),
             Value::Closure { params, .. } => {
                 format!("<closure ({})>", params.join(" "))
+            }
+            Value::HashMap(map) => {
+                let mut items: Vec<String> = map.iter()
+                    .map(|(k, v)| format!("{} {}", self.format_value(&Value::String(k.clone())), self.format_value(v)))
+                    .collect();
+                items.sort(); // Sort for consistent output
+                format!("{{{}}}", items.join(" "))
+            }
+            Value::Vector(items) => {
+                let formatted_items: Vec<String> = items
+                    .iter()
+                    .map(|v| self.format_value(v))
+                    .collect();
+                format!("[{}]", formatted_items.join(" "))
             }
         }
     }

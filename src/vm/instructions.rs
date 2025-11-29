@@ -35,6 +35,12 @@ pub enum Instruction {
     Car,     // Pop list, push first element
     Cdr,     // Pop list, push rest of list
     IsList,  // Pop value, push boolean indicating if it's a list
+    // Type predicates
+    IsInteger,      // Pop value, push boolean indicating if it's an integer
+    IsBoolean,      // Pop value, push boolean indicating if it's a boolean
+    IsFunction,     // Pop value, push boolean indicating if it's a function
+    IsClosure,      // Pop value, push boolean indicating if it's a closure
+    IsProcedure,    // Pop value, push boolean indicating if it's a function or closure
     // String/Symbol operations
     IsString,       // Pop value, push boolean indicating if it's a string
     IsSymbol,       // Pop value, push boolean indicating if it's a symbol
@@ -53,6 +59,7 @@ pub enum Instruction {
     ListLength,     // Pop list, push its length as integer
     // Number operations
     NumberToString, // Pop integer, push string representation
+    StringToNumber, // Pop string, push integer (or error if not a valid number)
     // File I/O operations
     ReadFile,       // Pop string path, push file contents as string (or error)
     WriteFile,      // Pop string path, string content; push boolean success
@@ -63,4 +70,23 @@ pub enum Instruction {
     StoreGlobal(String), // Pop value from stack and store in global variable
     // Command-line arguments
     GetArgs,             // Push command-line arguments as a list of strings
+    // HashMap operations
+    MakeHashMap(usize),  // Pop N key-value pairs from stack (key1, val1, key2, val2, ...) and create a hashmap
+    HashMapGet,          // Pop hashmap and key, push value (or error if not found)
+    HashMapSet,          // Pop hashmap, key, value; push new hashmap with key-value set
+    HashMapKeys,         // Pop hashmap, push list of keys
+    HashMapValues,       // Pop hashmap, push list of values
+    HashMapContainsKey,  // Pop hashmap and key, push boolean
+    IsHashMap,           // Pop value, push boolean indicating if it's a hashmap
+    // Vector operations
+    MakeVector(usize),   // Pop N values from stack and create a vector from them (in order)
+    VectorGet,           // Pop vector and index, push element at that index (0-based)
+    VectorSet,           // Pop vector, index, value; push new vector with element at index set
+    VectorPush,          // Pop vector and value, push new vector with value appended
+    VectorPop,           // Pop vector, push vector without last element and the last element
+    VectorLength,        // Pop vector, push its length as integer
+    IsVector,            // Pop value, push boolean indicating if it's a vector
+    // Type conversions
+    ListToVector,        // Pop list, push vector with same elements
+    VectorToList,        // Pop vector, push list with same elements
 }

@@ -138,6 +138,10 @@ impl Compiler {
                     } else if self.global_vars.contains_key(s) {
                         // Check if this is a global variable
                         self.emit(Instruction::LoadGlobal(s.clone()));
+                    } else if self.functions.contains_key(s) || Self::is_builtin_function(s) {
+                        // Check if this is a function name (user-defined or builtin)
+                        // Push it as a Function value so it can be passed around
+                        self.emit(Instruction::Push(Value::Function(s.clone())));
                     } else {
                         return Err(CompileError::new(
                             format!("Undefined variable '{}'", s),
@@ -562,6 +566,40 @@ impl Compiler {
                         // Convert the quoted expression to a runtime Value
                         let value = self.expr_to_value(&items[1])?;
                         self.emit(Instruction::Push(value));
+                    }
+
+                    "list" => {
+                        // list is variadic - compile all arguments and use MakeList
+                        let arg_count = items.len() - 1; // Exclude 'list' itself
+                        for arg in &items[1..] {
+                            self.compile_expr(arg)?;
+                        }
+                        self.emit(Instruction::MakeList(arg_count));
+                    }
+
+                    "hash-map" => {
+                        // hash-map expects key-value pairs: (hash-map "key1" val1 "key2" val2 ...)
+                        let arg_count = items.len() - 1; // Exclude 'hash-map' itself
+                        if arg_count % 2 != 0 {
+                            return Err(CompileError::new(
+                                "hash-map expects an even number of arguments (key-value pairs)".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+                        // Compile all key-value pairs
+                        for arg in &items[1..] {
+                            self.compile_expr(arg)?;
+                        }
+                        self.emit(Instruction::MakeHashMap(arg_count / 2));
+                    }
+
+                    "vector" => {
+                        // vector is variadic - compile all arguments and use MakeVector
+                        let arg_count = items.len() - 1; // Exclude 'vector' itself
+                        for arg in &items[1..] {
+                            self.compile_expr(arg)?;
+                        }
+                        self.emit(Instruction::MakeVector(arg_count));
                     }
 
                     // Quasiquote: (quasiquote expr) - like quote but allows unquote and unquote-splicing
@@ -1768,9 +1806,25 @@ impl Compiler {
                 }
                 Ok(SourceExpr::unknown(LispExpr::List(exprs)))
             }
+            Value::Function(name) => {
+                // Functions become symbols in the macro expansion
+                Ok(SourceExpr::unknown(LispExpr::Symbol(name.clone())))
+            }
             Value::Closure { .. } => {
                 Err(CompileError::new(
                     "Cannot convert closure to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
+            Value::HashMap(_) => {
+                Err(CompileError::new(
+                    "Cannot convert hashmap to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
+            Value::Vector(_) => {
+                Err(CompileError::new(
+                    "Cannot convert vector to expression in macro expansion".to_string(),
                     Location::unknown(),
                 ))
             }
@@ -2486,5 +2540,35 @@ impl Compiler {
 
         // Return (functions, main bytecode)
         Ok((self.functions.clone(), self.bytecode.clone()))
+    }
+
+    // Check if a name is a builtin function
+    fn is_builtin_function(name: &str) -> bool {
+        matches!(name,
+            // Arithmetic
+            "+" | "-" | "*" | "/" | "%" | "neg" |
+            // Comparison
+            "<=" | "<" | ">" | ">=" | "==" | "!=" |
+            // List operations
+            "cons" | "car" | "cdr" | "list?" | "append" | "list-ref" | "list-length" |
+            // Type predicates
+            "integer?" | "boolean?" | "function?" | "closure?" | "procedure?" | "number?" |
+            // String operations
+            "string?" | "symbol?" | "symbol->string" | "string->symbol" |
+            "string-length" | "substring" | "string-append" | "string->list" |
+            "list->string" | "char-code" | "number->string" | "string->number" |
+            // File I/O
+            "read-file" | "write-file" | "file-exists?" | "write-binary-file" |
+            // HashMap operations
+            "hashmap?" | "hashmap-get" | "hashmap-set" | "hashmap-keys" |
+            "hashmap-values" | "hashmap-contains-key?" |
+            // Vector operations
+            "vector?" | "vector-ref" | "vector-set" | "vector-push" | "vector-pop" |
+            "vector-length" |
+            // Type conversions
+            "list->vector" | "vector->list" |
+            // Other
+            "get-args" | "print"
+        )
     }
 }

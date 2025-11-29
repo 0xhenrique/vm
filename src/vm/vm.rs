@@ -36,53 +36,83 @@ impl VM {
     fn register_builtins(&mut self) {
         use Instruction::*;
 
-        // Arithmetic operations
-        self.functions.insert("+".to_string(), vec![Add, Ret]);
-        self.functions.insert("-".to_string(), vec![Sub, Ret]);
-        self.functions.insert("*".to_string(), vec![Mul, Ret]);
-        self.functions.insert("/".to_string(), vec![Div, Ret]);
-        self.functions.insert("%".to_string(), vec![Mod, Ret]);
-        self.functions.insert("neg".to_string(), vec![Neg, Ret]);
+        // Arithmetic operations (binary)
+        self.functions.insert("+".to_string(), vec![LoadArg(0), LoadArg(1), Add, Ret]);
+        self.functions.insert("-".to_string(), vec![LoadArg(0), LoadArg(1), Sub, Ret]);
+        self.functions.insert("*".to_string(), vec![LoadArg(0), LoadArg(1), Mul, Ret]);
+        self.functions.insert("/".to_string(), vec![LoadArg(0), LoadArg(1), Div, Ret]);
+        self.functions.insert("%".to_string(), vec![LoadArg(0), LoadArg(1), Mod, Ret]);
+        // Arithmetic operations (unary)
+        self.functions.insert("neg".to_string(), vec![LoadArg(0), Neg, Ret]);
 
         // Comparison operations
-        self.functions.insert("<=".to_string(), vec![Leq, Ret]);
-        self.functions.insert("<".to_string(), vec![Lt, Ret]);
-        self.functions.insert(">".to_string(), vec![Gt, Ret]);
-        self.functions.insert(">=".to_string(), vec![Gte, Ret]);
-        self.functions.insert("==".to_string(), vec![Eq, Ret]);
-        self.functions.insert("!=".to_string(), vec![Neq, Ret]);
+        self.functions.insert("<=".to_string(), vec![LoadArg(0), LoadArg(1), Leq, Ret]);
+        self.functions.insert("<".to_string(), vec![LoadArg(0), LoadArg(1), Lt, Ret]);
+        self.functions.insert(">".to_string(), vec![LoadArg(0), LoadArg(1), Gt, Ret]);
+        self.functions.insert(">=".to_string(), vec![LoadArg(0), LoadArg(1), Gte, Ret]);
+        self.functions.insert("==".to_string(), vec![LoadArg(0), LoadArg(1), Eq, Ret]);
+        self.functions.insert("!=".to_string(), vec![LoadArg(0), LoadArg(1), Neq, Ret]);
 
         // List operations
-        self.functions.insert("cons".to_string(), vec![Cons, Ret]);
-        self.functions.insert("car".to_string(), vec![Car, Ret]);
-        self.functions.insert("cdr".to_string(), vec![Cdr, Ret]);
-        self.functions.insert("list?".to_string(), vec![IsList, Ret]);
-        self.functions.insert("append".to_string(), vec![Append, Ret]);
-        self.functions.insert("list-ref".to_string(), vec![ListRef, Ret]);
-        self.functions.insert("list-length".to_string(), vec![ListLength, Ret]);
+        self.functions.insert("cons".to_string(), vec![LoadArg(0), LoadArg(1), Cons, Ret]);
+        self.functions.insert("car".to_string(), vec![LoadArg(0), Car, Ret]);
+        self.functions.insert("cdr".to_string(), vec![LoadArg(0), Cdr, Ret]);
+        self.functions.insert("list?".to_string(), vec![LoadArg(0), IsList, Ret]);
+        self.functions.insert("append".to_string(), vec![LoadArg(0), LoadArg(1), Append, Ret]);
+        self.functions.insert("list-ref".to_string(), vec![LoadArg(0), LoadArg(1), ListRef, Ret]);
+        self.functions.insert("list-length".to_string(), vec![LoadArg(0), ListLength, Ret]);
+
+        // Type predicates
+        self.functions.insert("integer?".to_string(), vec![LoadArg(0), IsInteger, Ret]);
+        self.functions.insert("boolean?".to_string(), vec![LoadArg(0), IsBoolean, Ret]);
+        self.functions.insert("function?".to_string(), vec![LoadArg(0), IsFunction, Ret]);
+        self.functions.insert("closure?".to_string(), vec![LoadArg(0), IsClosure, Ret]);
+        self.functions.insert("procedure?".to_string(), vec![LoadArg(0), IsProcedure, Ret]);
+        self.functions.insert("number?".to_string(), vec![LoadArg(0), IsInteger, Ret]); // Alias for integer? since we only have integers
 
         // String operations
-        self.functions.insert("string?".to_string(), vec![IsString, Ret]);
-        self.functions.insert("symbol?".to_string(), vec![IsSymbol, Ret]);
-        self.functions.insert("symbol->string".to_string(), vec![SymbolToString, Ret]);
-        self.functions.insert("string->symbol".to_string(), vec![StringToSymbol, Ret]);
-        self.functions.insert("string-length".to_string(), vec![StringLength, Ret]);
-        self.functions.insert("substring".to_string(), vec![Substring, Ret]);
-        self.functions.insert("string-append".to_string(), vec![StringAppend, Ret]);
-        self.functions.insert("string->list".to_string(), vec![StringToList, Ret]);
-        self.functions.insert("list->string".to_string(), vec![ListToString, Ret]);
-        self.functions.insert("char-code".to_string(), vec![CharCode, Ret]);
-        self.functions.insert("number->string".to_string(), vec![NumberToString, Ret]);
+        self.functions.insert("string?".to_string(), vec![LoadArg(0), IsString, Ret]);
+        self.functions.insert("symbol?".to_string(), vec![LoadArg(0), IsSymbol, Ret]);
+        self.functions.insert("symbol->string".to_string(), vec![LoadArg(0), SymbolToString, Ret]);
+        self.functions.insert("string->symbol".to_string(), vec![LoadArg(0), StringToSymbol, Ret]);
+        self.functions.insert("string-length".to_string(), vec![LoadArg(0), StringLength, Ret]);
+        self.functions.insert("substring".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), Substring, Ret]);
+        self.functions.insert("string-append".to_string(), vec![LoadArg(0), LoadArg(1), StringAppend, Ret]);
+        self.functions.insert("string->list".to_string(), vec![LoadArg(0), StringToList, Ret]);
+        self.functions.insert("list->string".to_string(), vec![LoadArg(0), ListToString, Ret]);
+        self.functions.insert("char-code".to_string(), vec![LoadArg(0), CharCode, Ret]);
+        self.functions.insert("number->string".to_string(), vec![LoadArg(0), NumberToString, Ret]);
+        self.functions.insert("string->number".to_string(), vec![LoadArg(0), StringToNumber, Ret]);
 
         // File I/O operations
-        self.functions.insert("read-file".to_string(), vec![ReadFile, Ret]);
-        self.functions.insert("write-file".to_string(), vec![WriteFile, Ret]);
-        self.functions.insert("file-exists?".to_string(), vec![FileExists, Ret]);
-        self.functions.insert("write-binary-file".to_string(), vec![WriteBinaryFile, Ret]);
+        self.functions.insert("read-file".to_string(), vec![LoadArg(0), ReadFile, Ret]);
+        self.functions.insert("write-file".to_string(), vec![LoadArg(0), LoadArg(1), WriteFile, Ret]);
+        self.functions.insert("file-exists?".to_string(), vec![LoadArg(0), FileExists, Ret]);
+        self.functions.insert("write-binary-file".to_string(), vec![LoadArg(0), LoadArg(1), WriteBinaryFile, Ret]);
 
         // Other operations
         self.functions.insert("get-args".to_string(), vec![GetArgs, Ret]);
-        self.functions.insert("print".to_string(), vec![Print, Ret]);
+        self.functions.insert("print".to_string(), vec![LoadArg(0), Print, Ret]);
+
+        // HashMap operations
+        self.functions.insert("hashmap?".to_string(), vec![LoadArg(0), IsHashMap, Ret]);
+        self.functions.insert("hashmap-get".to_string(), vec![LoadArg(0), LoadArg(1), HashMapGet, Ret]);
+        self.functions.insert("hashmap-set".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), HashMapSet, Ret]);
+        self.functions.insert("hashmap-keys".to_string(), vec![LoadArg(0), HashMapKeys, Ret]);
+        self.functions.insert("hashmap-values".to_string(), vec![LoadArg(0), HashMapValues, Ret]);
+        self.functions.insert("hashmap-contains-key?".to_string(), vec![LoadArg(0), LoadArg(1), HashMapContainsKey, Ret]);
+
+        // Vector operations
+        self.functions.insert("vector?".to_string(), vec![LoadArg(0), IsVector, Ret]);
+        self.functions.insert("vector-ref".to_string(), vec![LoadArg(0), LoadArg(1), VectorGet, Ret]);
+        self.functions.insert("vector-set".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), VectorSet, Ret]);
+        self.functions.insert("vector-push".to_string(), vec![LoadArg(0), LoadArg(1), VectorPush, Ret]);
+        self.functions.insert("vector-pop".to_string(), vec![LoadArg(0), VectorPop, Ret]);
+        self.functions.insert("vector-length".to_string(), vec![LoadArg(0), VectorLength, Ret]);
+
+        // Type conversions
+        self.functions.insert("list->vector".to_string(), vec![LoadArg(0), ListToVector, Ret]);
+        self.functions.insert("vector->list".to_string(), vec![LoadArg(0), VectorToList, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -390,10 +420,29 @@ impl VM {
                 }
                 args.reverse();
 
-                // Pop the closure
-                let closure = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CallClosure".to_string()))?;
+                // Pop the function/closure
+                let callable = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in CallClosure".to_string()))?;
 
-                match closure {
+                match callable {
+                    Value::Function(fn_name) => {
+                        // Call a named function (same as Call instruction)
+                        let fn_bytecode = self.functions.get(&fn_name)
+                            .ok_or_else(|| RuntimeError::new(format!("Undefined function '{}'", fn_name)))?
+                            .clone();
+
+                        let frame = Frame {
+                            return_address: self.instruction_pointer + 1,
+                            locals: args,
+                            return_bytecode: self.current_bytecode.clone(),
+                            function_name: fn_name.clone(),
+                            captured: Vec::new(),
+                            stack_base: self.value_stack.len(),
+                        };
+                        self.call_stack.push(frame);
+
+                        self.current_bytecode = fn_bytecode;
+                        self.instruction_pointer = 0;
+                    }
                     Value::Closure { params, body, captured } => {
                         // Verify arity
                         if params.len() != args.len() {
@@ -422,8 +471,8 @@ impl VM {
                     }
                     _ => {
                         return Err(RuntimeError::new(format!(
-                            "Type error: expected closure, got {}",
-                            Self::type_name(&closure)
+                            "Type error: expected function or closure, got {}",
+                            Self::type_name(&callable)
                         )));
                     }
                 }
@@ -580,6 +629,36 @@ impl VM {
                 self.value_stack.push(Value::Boolean(is_list));
                 self.instruction_pointer += 1;
             }
+            Instruction::IsInteger => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsInteger".to_string()))?;
+                let is_integer = matches!(value, Value::Integer(_));
+                self.value_stack.push(Value::Boolean(is_integer));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsBoolean => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsBoolean".to_string()))?;
+                let is_boolean = matches!(value, Value::Boolean(_));
+                self.value_stack.push(Value::Boolean(is_boolean));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsFunction => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsFunction".to_string()))?;
+                let is_function = matches!(value, Value::Function(_));
+                self.value_stack.push(Value::Boolean(is_function));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsClosure => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsClosure".to_string()))?;
+                let is_closure = matches!(value, Value::Closure { .. });
+                self.value_stack.push(Value::Boolean(is_closure));
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsProcedure => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsProcedure".to_string()))?;
+                let is_procedure = matches!(value, Value::Function(_) | Value::Closure { .. });
+                self.value_stack.push(Value::Boolean(is_procedure));
+                self.instruction_pointer += 1;
+            }
             Instruction::IsString => {
                 let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsString".to_string()))?;
                 let is_string = matches!(value, Value::String(_));
@@ -708,6 +787,32 @@ impl VM {
                     _ => {
                         return Err(RuntimeError::new(format!(
                             "Type error: 'number->string' expects an integer, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::StringToNumber => {
+                // Pop string and push integer (or error if not a valid number)
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in StringToNumber".to_string()))?;
+                match value {
+                    Value::String(s) => {
+                        match s.trim().parse::<i64>() {
+                            Ok(n) => {
+                                self.value_stack.push(Value::Integer(n));
+                            }
+                            Err(_) => {
+                                return Err(RuntimeError::new(format!(
+                                    "Type error: 'string->number' cannot parse '{}' as a number",
+                                    s
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'string->number' expects a string, got {}",
                             Self::type_name(&value)
                         )));
                     }
@@ -972,6 +1077,312 @@ impl VM {
                 self.value_stack.push(Value::List(args_list));
                 self.instruction_pointer += 1;
             }
+            // HashMap operations
+            Instruction::MakeHashMap(n) => {
+                // Pop n key-value pairs and create a hashmap
+                let mut pairs = Vec::new();
+                for _ in 0..n {
+                    let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeHashMap".to_string()))?;
+                    let key = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeHashMap".to_string()))?;
+                    pairs.push((key, value));
+                }
+                pairs.reverse(); // Reverse because we popped in reverse order
+
+                let mut map = std::collections::HashMap::new();
+                for (key, value) in pairs {
+                    match key {
+                        Value::String(s) => {
+                            map.insert(s, value);
+                        }
+                        _ => {
+                            return Err(RuntimeError::new(format!(
+                                "Type error: hashmap keys must be strings, got {}",
+                                Self::type_name(&key)
+                            )));
+                        }
+                    }
+                }
+                self.value_stack.push(Value::HashMap(map));
+                self.instruction_pointer += 1;
+            }
+            Instruction::HashMapGet => {
+                // Pop key and hashmap, push value
+                let key = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapGet".to_string()))?;
+                let map = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapGet".to_string()))?;
+
+                match (&map, &key) {
+                    (Value::HashMap(m), Value::String(k)) => {
+                        match m.get(k) {
+                            Some(v) => self.value_stack.push(v.clone()),
+                            None => {
+                                return Err(RuntimeError::new(format!(
+                                    "Key '{}' not found in hashmap",
+                                    k
+                                )));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'get' expects a hashmap and a string key, got {} and {}",
+                            Self::type_name(&map),
+                            Self::type_name(&key)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HashMapSet => {
+                // Pop value, key, and hashmap, push new hashmap with key-value set
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapSet".to_string()))?;
+                let key = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapSet".to_string()))?;
+                let map = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapSet".to_string()))?;
+
+                match (&map, &key) {
+                    (Value::HashMap(m), Value::String(k)) => {
+                        let mut new_map = m.clone();
+                        new_map.insert(k.clone(), value);
+                        self.value_stack.push(Value::HashMap(new_map));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'set' expects a hashmap and a string key, got {} and {}",
+                            Self::type_name(&map),
+                            Self::type_name(&key)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HashMapKeys => {
+                // Pop hashmap and push list of keys
+                let map = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapKeys".to_string()))?;
+
+                match map {
+                    Value::HashMap(m) => {
+                        let keys: Vec<Value> = m.keys().map(|k| Value::String(k.clone())).collect();
+                        self.value_stack.push(Value::List(keys));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'keys' expects a hashmap, got {}",
+                            Self::type_name(&map)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HashMapValues => {
+                // Pop hashmap and push list of values
+                let map = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapValues".to_string()))?;
+
+                match map {
+                    Value::HashMap(m) => {
+                        let values: Vec<Value> = m.values().cloned().collect();
+                        self.value_stack.push(Value::List(values));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'values' expects a hashmap, got {}",
+                            Self::type_name(&map)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::HashMapContainsKey => {
+                // Pop key and hashmap, push boolean
+                let key = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapContainsKey".to_string()))?;
+                let map = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in HashMapContainsKey".to_string()))?;
+
+                match (&map, &key) {
+                    (Value::HashMap(m), Value::String(k)) => {
+                        self.value_stack.push(Value::Boolean(m.contains_key(k)));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'contains-key?' expects a hashmap and a string key, got {} and {}",
+                            Self::type_name(&map),
+                            Self::type_name(&key)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsHashMap => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsHashMap".to_string()))?;
+                let is_hashmap = matches!(value, Value::HashMap(_));
+                self.value_stack.push(Value::Boolean(is_hashmap));
+                self.instruction_pointer += 1;
+            }
+            // Vector operations
+            Instruction::MakeVector(n) => {
+                // Pop n values and create a vector
+                let mut items = Vec::new();
+                for _ in 0..n {
+                    items.push(self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in MakeVector".to_string()))?);
+                }
+                items.reverse(); // Reverse because we popped in reverse order
+                self.value_stack.push(Value::Vector(items));
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorGet => {
+                // Pop index and vector, push element at that index
+                let index = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorGet".to_string()))?;
+                let vec = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorGet".to_string()))?;
+
+                match (&vec, &index) {
+                    (Value::Vector(items), Value::Integer(idx)) => {
+                        if *idx < 0 {
+                            return Err(RuntimeError::new(format!("'vector-ref' index cannot be negative: {}", idx)));
+                        }
+                        let idx_usize = *idx as usize;
+                        if idx_usize >= items.len() {
+                            return Err(RuntimeError::new(format!(
+                                "'vector-ref' index {} out of bounds for vector of length {}",
+                                idx, items.len()
+                            )));
+                        }
+                        self.value_stack.push(items[idx_usize].clone());
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector-ref' expects a vector and an integer, got {} and {}",
+                            Self::type_name(&vec),
+                            Self::type_name(&index)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorSet => {
+                // Pop value, index, and vector, push new vector with element at index set
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorSet".to_string()))?;
+                let index = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorSet".to_string()))?;
+                let vec = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorSet".to_string()))?;
+
+                match (&vec, &index) {
+                    (Value::Vector(items), Value::Integer(idx)) => {
+                        if *idx < 0 {
+                            return Err(RuntimeError::new(format!("'vector-set!' index cannot be negative: {}", idx)));
+                        }
+                        let idx_usize = *idx as usize;
+                        if idx_usize >= items.len() {
+                            return Err(RuntimeError::new(format!(
+                                "'vector-set!' index {} out of bounds for vector of length {}",
+                                idx, items.len()
+                            )));
+                        }
+                        let mut new_vec = items.clone();
+                        new_vec[idx_usize] = value;
+                        self.value_stack.push(Value::Vector(new_vec));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector-set!' expects a vector, an integer, and a value, got {} and {}",
+                            Self::type_name(&vec),
+                            Self::type_name(&index)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorPush => {
+                // Pop value and vector, push new vector with value appended
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorPush".to_string()))?;
+                let vec = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorPush".to_string()))?;
+
+                match vec {
+                    Value::Vector(mut items) => {
+                        items.push(value);
+                        self.value_stack.push(Value::Vector(items));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector-push!' expects a vector, got {}",
+                            Self::type_name(&vec)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorPop => {
+                // Pop vector, push vector without last element and the last element (two values on stack)
+                let vec = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorPop".to_string()))?;
+
+                match vec {
+                    Value::Vector(items) => {
+                        if items.is_empty() {
+                            return Err(RuntimeError::new("'vector-pop!' cannot pop from empty vector".to_string()));
+                        }
+                        let mut new_vec = items.clone();
+                        let last = new_vec.pop().unwrap();
+                        self.value_stack.push(Value::Vector(new_vec));
+                        self.value_stack.push(last);
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector-pop!' expects a vector, got {}",
+                            Self::type_name(&vec)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorLength => {
+                // Pop vector and push its length
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorLength".to_string()))?;
+                match value {
+                    Value::Vector(items) => {
+                        self.value_stack.push(Value::Integer(items.len() as i64));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector-length' expects a vector, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::IsVector => {
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in IsVector".to_string()))?;
+                let is_vector = matches!(value, Value::Vector(_));
+                self.value_stack.push(Value::Boolean(is_vector));
+                self.instruction_pointer += 1;
+            }
+            Instruction::ListToVector => {
+                // Pop list and push vector with same elements
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in ListToVector".to_string()))?;
+                match value {
+                    Value::List(list) => {
+                        self.value_stack.push(Value::Vector(list));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'list->vector' expects a list, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::VectorToList => {
+                // Pop vector and push list with same elements
+                let value = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in VectorToList".to_string()))?;
+                match value {
+                    Value::Vector(vec) => {
+                        self.value_stack.push(Value::List(vec));
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: 'vector->list' expects a vector, got {}",
+                            Self::type_name(&value)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
         }
 
         Ok(())
@@ -984,7 +1395,10 @@ impl VM {
             Value::List(_) => "list",
             Value::Symbol(_) => "symbol",
             Value::String(_) => "string",
+            Value::Function(_) => "function",
             Value::Closure { .. } => "closure",
+            Value::HashMap(_) => "hashmap",
+            Value::Vector(_) => "vector",
         }
     }
 
@@ -1001,8 +1415,23 @@ impl VM {
             }
             Value::Symbol(s) => s.clone(),
             Value::String(s) => format!("\"{}\"", s),
+            Value::Function(name) => format!("<function {}>", name),
             Value::Closure { params, .. } => {
                 format!("<closure/{}>", params.len())
+            }
+            Value::HashMap(map) => {
+                let mut items: Vec<String> = map.iter()
+                    .map(|(k, v)| format!("{} {}", Self::format_value(&Value::String(k.clone())), Self::format_value(v)))
+                    .collect();
+                items.sort(); // Sort for consistent output
+                format!("{{{}}}", items.join(" "))
+            }
+            Value::Vector(items) => {
+                let formatted_items: Vec<String> = items
+                    .iter()
+                    .map(|v| Self::format_value(v))
+                    .collect();
+                format!("[{}]", formatted_items.join(" "))
             }
         }
     }

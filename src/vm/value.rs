@@ -1,4 +1,5 @@
 use super::instructions::Instruction;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -7,11 +8,14 @@ pub enum Value {
     List(Vec<Value>),
     Symbol(String),
     String(String),
+    Function(String), // Reference to a named function
     Closure {
         params: Vec<String>,
         body: Vec<Instruction>,
         captured: Vec<(String, Value)>, // Captured environment as ordered pairs
     },
+    HashMap(HashMap<String, Value>), // Hash map with string keys
+    Vector(Vec<Value>), // Efficient array with O(1) indexed access
 }
 
 impl Value {
@@ -37,6 +41,10 @@ impl Value {
 
     pub fn is_closure(&self) -> bool {
         matches!(self, Value::Closure { .. })
+    }
+
+    pub fn is_function(&self) -> bool {
+        matches!(self, Value::Function(_))
     }
 
     pub fn as_int(&self) -> Option<i64> {
@@ -74,6 +82,38 @@ impl Value {
     pub fn as_list(&self) -> Option<&Vec<Value>> {
         if let Value::List(lst) = self {
             Some(lst)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_function(&self) -> Option<&str> {
+        if let Value::Function(name) = self {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_hashmap(&self) -> bool {
+        matches!(self, Value::HashMap(_))
+    }
+
+    pub fn as_hashmap(&self) -> Option<&HashMap<String, Value>> {
+        if let Value::HashMap(map) = self {
+            Some(map)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_vector(&self) -> bool {
+        matches!(self, Value::Vector(_))
+    }
+
+    pub fn as_vector(&self) -> Option<&Vec<Value>> {
+        if let Value::Vector(vec) = self {
+            Some(vec)
         } else {
             None
         }
