@@ -21,6 +21,8 @@ pub struct VM {
     pub global_vars: HashMap<String, Value>, // Global variables
     pub args: Vec<String>, // Command-line arguments
     pub loaded_modules: HashSet<String>,     // Track loaded modules for require
+    pub loading_modules: Vec<String>,        // Stack of modules currently being loaded (for circular dep detection)
+    pub module_exports: HashMap<String, HashSet<String>>, // Module name -> exported symbols
 }
 
 impl VM {
@@ -36,6 +38,8 @@ impl VM {
             global_vars: HashMap::new(),
             args: Vec::new(),
             loaded_modules: HashSet::new(),
+            loading_modules: Vec::new(),
+            module_exports: HashMap::new(),
         };
         vm.register_builtins();
         vm
@@ -1890,28 +1894,51 @@ impl VM {
                             .to_string_lossy()
                             .to_string();
 
+                        // Check for circular dependency
+                        if self.loading_modules.contains(&canonical_path) {
+                            let cycle: Vec<&str> = self.loading_modules.iter().map(|s| s.as_str()).collect();
+                            return Err(RuntimeError::new(format!(
+                                "Circular dependency detected: {} -> {}",
+                                cycle.join(" -> "),
+                                canonical_path
+                            )));
+                        }
+
                         // Check if already loaded
                         if self.loaded_modules.contains(&canonical_path) {
                             // Already loaded, just return true
                             self.value_stack.push(Value::Boolean(true));
                         } else {
-                            // Not loaded yet, load it
+                            // Mark as currently loading (for circular dependency detection)
+                            self.loading_modules.push(canonical_path.clone());
+
                             // Read the file
                             let source = std::fs::read_to_string(path_str.as_str()).map_err(|e| {
+                                self.loading_modules.pop();
                                 RuntimeError::new(format!("'require' failed to read '{}': {}", path_str, e))
                             })?;
 
                             // Parse the file
                             let mut parser = Parser::new(&source);
                             let exprs = parser.parse_all().map_err(|e| {
+                                self.loading_modules.pop();
                                 RuntimeError::new(format!("'require' failed to parse '{}': {}", path_str, e))
                             })?;
 
-                            // Compile the file
+                            // Compile the file, passing existing module exports for import validation
                             let mut compiler = Compiler::new();
+                            for (module, exports) in &self.module_exports {
+                                compiler.with_known_module_exports(module, exports);
+                            }
                             let (functions, main) = compiler.compile_program(&exprs).map_err(|e| {
+                                self.loading_modules.pop();
                                 RuntimeError::new(format!("'require' failed to compile '{}': {}", path_str, e.message))
                             })?;
+
+                            // Merge module exports from compiled file
+                            for (module, exports) in compiler.module_exports {
+                                self.module_exports.insert(module, exports);
+                            }
 
                             // Merge compiled functions into VM's function table
                             self.functions.extend(functions);
@@ -1932,8 +1959,9 @@ impl VM {
                             self.instruction_pointer = saved_ip;
                             self.halted = false;
 
-                            // Mark as loaded
+                            // Mark as loaded and remove from loading stack
                             self.loaded_modules.insert(canonical_path);
+                            self.loading_modules.pop();
 
                             // Push a success value (true) onto the stack
                             self.value_stack.push(Value::Boolean(true));
