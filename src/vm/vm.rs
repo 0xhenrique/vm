@@ -103,6 +103,7 @@ impl VM {
         self.functions.insert("string-contains?".to_string(), vec![LoadArg(0), LoadArg(1), StringContains, Ret]);
         self.functions.insert("string-upcase".to_string(), vec![LoadArg(0), StringUpcase, Ret]);
         self.functions.insert("string-downcase".to_string(), vec![LoadArg(0), StringDowncase, Ret]);
+        self.functions.insert("format".to_string(), vec![LoadArg(0), LoadArg(1), Format, Ret]);
 
         // File I/O operations
         self.functions.insert("read-file".to_string(), vec![LoadArg(0), ReadFile, Ret]);
@@ -1665,6 +1666,56 @@ impl VM {
                             "Type error: 'string-downcase' expects a string, got {}",
                             Self::type_name(&string)
                         )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+            Instruction::Format => {
+                let args = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Format".to_string()))?;
+                let format_string = self.value_stack.pop().ok_or_else(|| RuntimeError::new("Stack underflow in Format".to_string()))?;
+
+                match (&format_string, &args) {
+                    (Value::String(fmt), Value::List(arg_list)) => {
+                        let mut result = String::new();
+                        let mut chars = fmt.chars().peekable();
+                        let mut arg_iter = arg_list.iter();
+
+                        while let Some(ch) = chars.next() {
+                            if ch == '{' {
+                                if chars.peek() == Some(&'}') {
+                                    chars.next(); // consume '}'
+                                    // Replace {} with next argument
+                                    if let Some(arg_value) = arg_iter.next() {
+                                        result.push_str(&Self::value_to_display_string(arg_value));
+                                    } else {
+                                        return Err(RuntimeError::with_suggestion(
+                                            "Not enough arguments for format placeholders".to_string(),
+                                            "The format string has more {} placeholders than provided arguments. Make sure the list has enough values.".to_string(),
+                                        ));
+                                    }
+                                } else {
+                                    result.push(ch);
+                                }
+                            } else {
+                                result.push(ch);
+                            }
+                        }
+
+                        self.value_stack.push(Value::String(Arc::new(result)));
+                    }
+                    (Value::String(_), _) => {
+                        return Err(RuntimeError::with_suggestion(
+                            format!("Type error: 'format' expects a list as second argument, got {}", Self::type_name(&args)),
+                            "The format function takes a format string and a list of values: (format \"x={}\" (list 42))".to_string(),
+                        ));
+                    }
+                    (_, _) => {
+                        return Err(RuntimeError::with_suggestion(
+                            format!("Type error: 'format' expects a string and a list, got {} and {}",
+                                Self::type_name(&format_string),
+                                Self::type_name(&args)),
+                            "Usage: (format \"Hello, {}!\" (list \"world\"))".to_string(),
+                        ));
                     }
                 }
                 self.instruction_pointer += 1;
@@ -3619,6 +3670,51 @@ impl VM {
                 let formatted_items: Vec<String> = items
                     .iter()
                     .map(|v| Self::format_value(v))
+                    .collect();
+                format!("[{}]", formatted_items.join(" "))
+            }
+            Value::TcpListener(_) => "<tcp-listener>".to_string(),
+            Value::TcpStream(_) => "<tcp-stream>".to_string(),
+            Value::SharedTcpListener(_) => "<shared-tcp-listener>".to_string(),
+        }
+    }
+
+    /// Format value for display in format strings (strings without quotes)
+    fn value_to_display_string(value: &Value) -> String {
+        match value {
+            Value::Integer(n) => n.to_string(),
+            Value::Float(f) => {
+                if f.fract() == 0.0 && f.is_finite() {
+                    format!("{}.0", f)
+                } else {
+                    f.to_string()
+                }
+            }
+            Value::Boolean(b) => b.to_string(),
+            Value::String(s) => s.to_string(), // No quotes for format strings
+            Value::Symbol(s) => s.to_string(),
+            Value::List(list) => {
+                let formatted_items: Vec<String> = list
+                    .iter()
+                    .map(|v| Self::value_to_display_string(v))
+                    .collect();
+                format!("({})", formatted_items.join(" "))
+            }
+            Value::Function(name) => format!("<function {}>", name),
+            Value::Closure(closure_data) => {
+                format!("<closure/{}>", closure_data.params.len())
+            }
+            Value::HashMap(map) => {
+                let mut items: Vec<String> = map.iter()
+                    .map(|(k, v)| format!("{} {}", k, Self::value_to_display_string(v)))
+                    .collect();
+                items.sort();
+                format!("{{{}}}", items.join(" "))
+            }
+            Value::Vector(items) => {
+                let formatted_items: Vec<String> = items
+                    .iter()
+                    .map(|v| Self::value_to_display_string(v))
                     .collect();
                 format!("[{}]", formatted_items.join(" "))
             }

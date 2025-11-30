@@ -343,6 +343,7 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         Instruction::StringContains => bytes.push(128),
         Instruction::StringUpcase => bytes.push(129),
         Instruction::StringDowncase => bytes.push(130),
+        Instruction::Format => bytes.push(131),
         // Date/Time operations (109-110)
         Instruction::CurrentTimestamp => bytes.push(109),
         Instruction::FormatTimestamp => bytes.push(110),
@@ -584,6 +585,7 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         128 => Ok(Instruction::StringContains),
         129 => Ok(Instruction::StringUpcase),
         130 => Ok(Instruction::StringDowncase),
+        131 => Ok(Instruction::Format),
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }

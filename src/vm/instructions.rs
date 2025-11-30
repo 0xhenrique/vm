@@ -70,6 +70,7 @@ pub enum Instruction {
     StringContains,   // Pop string and substring, push boolean
     StringUpcase,     // Pop string, push uppercase version
     StringDowncase,   // Pop string, push lowercase version
+    Format,           // Pop format string and N arguments, push formatted string
     // List manipulation
     Append,         // Pop two lists, push their concatenation (second appended to first)
     MakeList(usize), // Pop N values from stack and create a list from them (in order)
