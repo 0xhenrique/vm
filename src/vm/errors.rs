@@ -31,11 +31,24 @@ impl Location {
 pub struct CompileError {
     pub message: String,
     pub location: Location,
+    pub suggestion: Option<String>,
 }
 
 impl CompileError {
     pub fn new(message: String, location: Location) -> Self {
-        CompileError { message, location }
+        CompileError {
+            message,
+            location,
+            suggestion: None,
+        }
+    }
+
+    pub fn with_suggestion(message: String, location: Location, suggestion: String) -> Self {
+        CompileError {
+            message,
+            location,
+            suggestion: Some(suggestion),
+        }
     }
 
     /// Format the error with optional source code context
@@ -90,6 +103,15 @@ impl CompileError {
             }
         }
 
+        // Show suggestion if available
+        if let Some(suggestion) = &self.suggestion {
+            output.push_str("├─ Suggestion ────────────────────────────────\n");
+            // Word wrap the suggestion at 45 characters
+            for line in Self::word_wrap(suggestion, 45) {
+                output.push_str(&format!("│ {}\n", line));
+            }
+        }
+
         output.push_str(&format!("╰─────────────────────────────────────────────\n"));
         output
     }
@@ -102,6 +124,31 @@ impl CompileError {
             self.message
         )
     }
+
+    /// Word wrap text to a maximum line length
+    fn word_wrap(text: &str, max_len: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+
+        for word in text.split_whitespace() {
+            if current_line.is_empty() {
+                current_line.push_str(word);
+            } else if current_line.len() + 1 + word.len() <= max_len {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                lines.push(current_line.clone());
+                current_line.clear();
+                current_line.push_str(word);
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        lines
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +156,7 @@ pub struct RuntimeError {
     pub message: String,
     pub call_stack: Vec<String>,
     pub location: Option<Location>,
+    pub suggestion: Option<String>,
 }
 
 impl RuntimeError {
@@ -117,6 +165,16 @@ impl RuntimeError {
             message,
             call_stack: Vec::new(),
             location: None,
+            suggestion: None,
+        }
+    }
+
+    pub fn with_suggestion(message: String, suggestion: String) -> Self {
+        RuntimeError {
+            message,
+            call_stack: Vec::new(),
+            location: None,
+            suggestion: Some(suggestion),
         }
     }
 
@@ -125,6 +183,7 @@ impl RuntimeError {
             message,
             call_stack,
             location: None,
+            suggestion: None,
         }
     }
 
@@ -133,6 +192,7 @@ impl RuntimeError {
             message,
             call_stack: Vec::new(),
             location: Some(location),
+            suggestion: None,
         }
     }
 
@@ -145,6 +205,7 @@ impl RuntimeError {
             message,
             call_stack,
             location,
+            suggestion: None,
         }
     }
 
@@ -171,8 +232,42 @@ impl RuntimeError {
             }
         }
 
+        // Show suggestion if available
+        if let Some(suggestion) = &self.suggestion {
+            output.push_str("├─ Suggestion ────────────────────────────────\n");
+            // Word wrap the suggestion at 45 characters
+            for line in Self::word_wrap(suggestion, 45) {
+                output.push_str(&format!("│ {}\n", line));
+            }
+        }
+
         output.push_str("╰─────────────────────────────────────────────\n");
         output
+    }
+
+    /// Word wrap text to a maximum line length
+    fn word_wrap(text: &str, max_len: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current_line = String::new();
+
+        for word in text.split_whitespace() {
+            if current_line.is_empty() {
+                current_line.push_str(word);
+            } else if current_line.len() + 1 + word.len() <= max_len {
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                lines.push(current_line.clone());
+                current_line.clear();
+                current_line.push_str(word);
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        lines
     }
 
     pub fn format_simple(&self) -> String {

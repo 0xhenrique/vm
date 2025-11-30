@@ -169,9 +169,10 @@ impl Compiler {
 
             // Case: DottedList - only valid in patterns
             LispExpr::DottedList(_, _) => {
-                return Err(CompileError::new(
+                return Err(CompileError::with_suggestion(
                     "Dotted lists can only be used in patterns, not in expressions".to_string(),
                     expr.location.clone(),
+                    "Dotted lists like (a . b) are only valid in pattern matching (defun, match). To create a cons cell, use (cons a b) instead.".to_string(),
                 ));
             }
 
@@ -201,9 +202,12 @@ impl Compiler {
                         // Push it as a Function value so it can be passed around
                         self.emit(Instruction::Push(Value::Function(Arc::new(s.clone()))));
                     } else {
-                        return Err(CompileError::new(
+                        // Generate helpful suggestion for undefined variable
+                        let suggestion = self.suggest_similar_name(s);
+                        return Err(CompileError::with_suggestion(
                             format!("Undefined variable '{}'", s),
                             expr.location.clone(),
+                            suggestion,
                         ));
                     }
                 }
@@ -212,9 +216,10 @@ impl Compiler {
             // Case: List (function call or special form)
             LispExpr::List(items) => {
                 if items.is_empty() {
-                    return Err(CompileError::new(
+                    return Err(CompileError::with_suggestion(
                         "Empty list cannot be compiled".to_string(),
                         expr.location.clone(),
+                        "Empty lists '()' are only valid as data (nil). Use '(quote ())' for an empty list value, or check if you meant to call a function.".to_string(),
                     ));
                 }
 
@@ -225,9 +230,10 @@ impl Compiler {
                     // Arithmetic operators: +, -, *, /
                     "+" => {
                         if items.len() < 3 {
-                            return Err(CompileError::new(
+                            return Err(CompileError::with_suggestion(
                                 "+ expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
+                                "The + operator requires at least 2 numbers to add. Example: (+ 1 2) or (+ 1 2 3 4)".to_string(),
                             ));
                         }
                         // Arguments to + are not in tail position
@@ -249,9 +255,10 @@ impl Compiler {
                     }
                     "-" => {
                         if items.len() < 3 {
-                            return Err(CompileError::new(
+                            return Err(CompileError::with_suggestion(
                                 "- expects at least 2 arguments".to_string(),
                                 expr.location.clone(),
+                                "The - operator requires at least 2 numbers. Example: (- 10 3) subtracts 3 from 10. For negation, use (- 0 x) or the 'neg' function.".to_string(),
                             ));
                         }
                         // Arguments are not in tail position
@@ -3473,5 +3480,80 @@ impl Compiler {
             // Other
             "get-args" | "print"
         )
+    }
+
+    /// Generate a helpful suggestion for an undefined variable name
+    /// Uses Levenshtein distance to find similar names
+    fn suggest_similar_name(&self, undefined_name: &str) -> String {
+        let mut all_names = Vec::new();
+
+        // Collect all possible names
+        all_names.extend(self.local_bindings.keys().cloned());
+        all_names.extend(self.pattern_bindings.keys().cloned());
+        all_names.extend(self.param_names.iter().cloned());
+        all_names.extend(self.global_vars.keys().cloned());
+        all_names.extend(self.known_globals.iter().cloned());
+        all_names.extend(self.functions.keys().cloned());
+        all_names.extend(self.known_functions.iter().cloned());
+
+        // Find the most similar name using Levenshtein distance
+        let mut best_match = None;
+        let mut best_distance = usize::MAX;
+
+        for name in &all_names {
+            let distance = Self::levenshtein_distance(undefined_name, name);
+            // Only consider names within edit distance of 3
+            if distance < best_distance && distance <= 3 {
+                best_distance = distance;
+                best_match = Some(name.clone());
+            }
+        }
+
+        if let Some(similar_name) = best_match {
+            format!("Did you mean '{}'? Check your spelling or define the variable before using it.", similar_name)
+        } else {
+            "Make sure the variable is defined before using it. Use 'defvar' to define global variables, or check if it's in scope.".to_string()
+        }
+    }
+
+    /// Calculate Levenshtein distance between two strings
+    /// This measures the minimum number of single-character edits needed to transform one string into another
+    fn levenshtein_distance(s1: &str, s2: &str) -> usize {
+        let len1 = s1.chars().count();
+        let len2 = s2.chars().count();
+
+        if len1 == 0 {
+            return len2;
+        }
+        if len2 == 0 {
+            return len1;
+        }
+
+        let mut matrix = vec![vec![0; len2 + 1]; len1 + 1];
+
+        for i in 0..=len1 {
+            matrix[i][0] = i;
+        }
+        for j in 0..=len2 {
+            matrix[0][j] = j;
+        }
+
+        let s1_chars: Vec<char> = s1.chars().collect();
+        let s2_chars: Vec<char> = s2.chars().collect();
+
+        for (i, &c1) in s1_chars.iter().enumerate() {
+            for (j, &c2) in s2_chars.iter().enumerate() {
+                let cost = if c1 == c2 { 0 } else { 1 };
+                matrix[i + 1][j + 1] = std::cmp::min(
+                    std::cmp::min(
+                        matrix[i][j + 1] + 1,     // deletion
+                        matrix[i + 1][j] + 1      // insertion
+                    ),
+                    matrix[i][j] + cost           // substitution
+                );
+            }
+        }
+
+        matrix[len1][len2]
     }
 }
