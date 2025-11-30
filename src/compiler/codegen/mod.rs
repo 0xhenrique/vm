@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::vm::value::{Value, List};
-use crate::vm::instructions::Instruction;
+use crate::vm::instructions::{Instruction, FfiType};
+use crate::vm::ffi::parse_ffi_type;
 use crate::vm::errors::{CompileError, Location};
 use super::ast::{LispExpr, SourceExpr};
 
@@ -722,6 +723,46 @@ impl Compiler {
                             self.compile_expr(arg)?;
                         }
                         self.emit(Instruction::MakeVector(arg_count));
+                    }
+
+                    // FFI call: (ffi-call func-ptr (arg-types...) return-type arg1 arg2 ...)
+                    "ffi-call" => {
+                        if items.len() < 4 {
+                            return Err(CompileError::new(
+                                "ffi-call expects at least 3 arguments: func-ptr, (arg-types...), return-type, [args...]".to_string(),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        // Parse arg types from second argument (must be a list)
+                        let arg_types = self.parse_ffi_arg_types(&items[2])?;
+
+                        // Parse return type from third argument
+                        let return_type = self.parse_ffi_type(&items[3])?;
+
+                        // Check argument count matches
+                        let actual_args = items.len() - 4; // Exclude ffi-call, func-ptr, arg-types, return-type
+                        if actual_args != arg_types.len() {
+                            return Err(CompileError::new(
+                                format!(
+                                    "ffi-call: expected {} arguments based on arg-types, got {}",
+                                    arg_types.len(),
+                                    actual_args
+                                ),
+                                expr.location.clone(),
+                            ));
+                        }
+
+                        // Compile function pointer expression
+                        self.compile_expr(&items[1])?;
+
+                        // Compile all arguments
+                        for arg in &items[4..] {
+                            self.compile_expr(arg)?;
+                        }
+
+                        // Emit FFI call instruction with type info
+                        self.emit(Instruction::FfiCall(arg_types, return_type));
                     }
 
                     // Quasiquote: (quasiquote expr) - like quote but allows unquote and unquote-splicing
@@ -2859,5 +2900,37 @@ impl Compiler {
 
         // Return (functions, main bytecode)
         Ok((self.functions.clone(), self.bytecode.clone()))
+    }
+
+    // ==================== FFI TYPE PARSING ====================
+
+    /// Parse FFI argument types from a list expression
+    fn parse_ffi_arg_types(&self, expr: &SourceExpr) -> Result<Vec<FfiType>, CompileError> {
+        match &expr.expr {
+            LispExpr::List(items) => {
+                let mut types = Vec::new();
+                for item in items {
+                    types.push(self.parse_ffi_type(item)?);
+                }
+                Ok(types)
+            }
+            _ => Err(CompileError::new(
+                "ffi-call: argument types must be a list".to_string(),
+                expr.location.clone(),
+            )),
+        }
+    }
+
+    /// Parse a single FFI type from an expression (symbol like :int, :string, etc.)
+    fn parse_ffi_type(&self, expr: &SourceExpr) -> Result<FfiType, CompileError> {
+        match &expr.expr {
+            LispExpr::Symbol(s) => {
+                parse_ffi_type(s).map_err(|e| CompileError::new(e, expr.location.clone()))
+            }
+            _ => Err(CompileError::new(
+                "ffi-call: type must be a symbol (e.g., :int, :string, :pointer)".to_string(),
+                expr.location.clone(),
+            )),
+        }
     }
 }

@@ -155,4 +155,42 @@ pub enum Instruction {
     // Multi-threaded HTTP (Phase 14b)
     HttpListenShared,    // Pop port (integer), push SharedTcpListener (thread-safe)
     HttpServeParallel,   // Pop SharedTcpListener, handler closure, num_workers, max_requests; parallel request handling
+    // FFI (Foreign Function Interface) - Phase 21
+    FfiLoadLibrary,      // Pop string path, push library handle as integer (0 on failure)
+    FfiGetSymbol,        // Pop library handle and symbol name, push symbol address as pointer
+    FfiCall(Vec<FfiType>, FfiType), // Pop function pointer and N args, call with signature, push result
+    FfiPointerToString,  // Pop pointer (char*), push Lisp string (reads until null)
+    FfiStringToPointer,  // Pop string, push pointer to null-terminated C string (allocates memory)
+    FfiFreeString,       // Pop pointer, free the memory allocated by FfiStringToPointer
+    FfiNullPointer,      // Push null pointer (0)
+    FfiPointerNull,      // Pop pointer, push boolean indicating if it's null
+    IsPointer,           // Pop value, push boolean indicating if it's a pointer
+    FfiPointerAdd,       // Pop pointer and integer offset, push new pointer (pointer arithmetic)
+    FfiReadInt,          // Pop pointer, read 64-bit int at address, push integer
+    FfiWriteInt,         // Pop pointer and integer value, write to address, push boolean
+    FfiReadFloat,        // Pop pointer, read 64-bit float at address, push float
+    FfiWriteFloat,       // Pop pointer and float value, write to address, push boolean
+    FfiReadByte,         // Pop pointer, read single byte at address, push integer (0-255)
+    FfiWriteByte,        // Pop pointer and integer (0-255), write byte to address, push boolean
+    FfiAllocate,         // Pop size (integer), allocate memory, push pointer
+    FfiFree,             // Pop pointer, free memory, push boolean
+    FfiSizeOf(FfiType),  // Push size of FFI type in bytes
+}
+
+/// FFI type descriptors for marshalling between Lisp and C
+#[derive(Debug, Clone, PartialEq)]
+pub enum FfiType {
+    Void,      // void (only valid as return type)
+    Int8,      // int8_t / char
+    Int16,     // int16_t / short
+    Int32,     // int32_t / int
+    Int64,     // int64_t / long long
+    UInt8,     // uint8_t / unsigned char
+    UInt16,    // uint16_t / unsigned short
+    UInt32,    // uint32_t / unsigned int
+    UInt64,    // uint64_t / unsigned long long
+    Float,     // float (32-bit)
+    Double,    // double (64-bit)
+    Pointer,   // void* (any pointer)
+    String,    // char* (null-terminated string, auto-converted)
 }

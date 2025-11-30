@@ -58,6 +58,7 @@ fn format_value(value: &Value) -> String {
         Value::TcpListener(_) => "#<tcp-listener>".to_string(),
         Value::TcpStream(_) => "#<tcp-stream>".to_string(),
         Value::SharedTcpListener(_) => "#<shared-tcp-listener>".to_string(),
+        Value::Pointer(p) => format!("#<pointer 0x{:x}>", p),
     }
 }
 

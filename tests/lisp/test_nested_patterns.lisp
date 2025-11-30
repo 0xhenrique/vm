@@ -1,4 +1,5 @@
-;; Tests various levels of nesting in list and dotted-list patterns
+; Comprehensive tests for deeply nested pattern matching
+; Tests various levels of nesting in list and dotted-list patterns
 
 (print "=== Testing Deeply Nested Patterns ===")
 (print "")

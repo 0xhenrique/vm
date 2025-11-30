@@ -10,8 +10,10 @@ pub mod env;
 pub mod builtins;
 pub mod errors;
 pub mod object;
+pub mod ffi;
 
 // Re-export commonly used types for convenience
 pub use value::{Value, List};
-pub use instructions::Instruction;
+pub use instructions::{Instruction, FfiType};
 pub use vm::VM;
+pub use ffi::FfiState;

@@ -204,6 +204,12 @@ impl Compiler {
                     Location::unknown(),
                 ))
             }
+            Value::Pointer(_) => {
+                Err(CompileError::new(
+                    "Cannot convert pointer to expression in macro expansion".to_string(),
+                    Location::unknown(),
+                ))
+            }
         }
     }
 }

@@ -208,6 +208,7 @@ pub enum Value {
     TcpListener(Rc<RefCell<TcpListener>>), // TCP listener for HTTP server
     TcpStream(Rc<RefCell<TcpStream>>), // TCP stream for HTTP connections
     SharedTcpListener(Arc<std::net::TcpListener>), // Thread-safe TCP listener for parallel serving
+    Pointer(i64), // Raw pointer for FFI (null = 0)
 }
 
 // Custom PartialEq to handle NaN in floats
@@ -231,6 +232,7 @@ impl PartialEq for Value {
             (Value::HashMap(a), Value::HashMap(b)) => a == b,
             (Value::Vector(a), Value::Vector(b)) => a == b,
             (Value::Closure(a), Value::Closure(b)) => a == b,
+            (Value::Pointer(a), Value::Pointer(b)) => a == b,
             _ => false,
         }
     }
@@ -376,5 +378,27 @@ impl Value {
     /// Helper to create a list from a vector
     pub fn list_from_vec(items: Vec<Value>) -> Self {
         Value::List(List::from_vec(items))
+    }
+
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Value::Pointer(_))
+    }
+
+    pub fn as_pointer(&self) -> Option<i64> {
+        if let Value::Pointer(p) = self {
+            Some(*p)
+        } else {
+            None
+        }
+    }
+
+    /// Helper to create a null pointer
+    pub fn null_pointer() -> Self {
+        Value::Pointer(0)
+    }
+
+    /// Helper to create a pointer from an address
+    pub fn pointer(addr: i64) -> Self {
+        Value::Pointer(addr)
     }
 }

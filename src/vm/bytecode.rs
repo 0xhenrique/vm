@@ -3,8 +3,46 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Arc;
 
-use super::instructions::Instruction;
+use super::instructions::{Instruction, FfiType};
 use super::value::{Value, List, ClosureData};
+
+// FFI type serialization helpers
+fn ffi_type_to_byte(ffi_type: &FfiType) -> u8 {
+    match ffi_type {
+        FfiType::Void => 0,
+        FfiType::Int8 => 1,
+        FfiType::Int16 => 2,
+        FfiType::Int32 => 3,
+        FfiType::Int64 => 4,
+        FfiType::UInt8 => 5,
+        FfiType::UInt16 => 6,
+        FfiType::UInt32 => 7,
+        FfiType::UInt64 => 8,
+        FfiType::Float => 9,
+        FfiType::Double => 10,
+        FfiType::Pointer => 11,
+        FfiType::String => 12,
+    }
+}
+
+fn byte_to_ffi_type(byte: u8) -> Result<FfiType, String> {
+    match byte {
+        0 => Ok(FfiType::Void),
+        1 => Ok(FfiType::Int8),
+        2 => Ok(FfiType::Int16),
+        3 => Ok(FfiType::Int32),
+        4 => Ok(FfiType::Int64),
+        5 => Ok(FfiType::UInt8),
+        6 => Ok(FfiType::UInt16),
+        7 => Ok(FfiType::UInt32),
+        8 => Ok(FfiType::UInt64),
+        9 => Ok(FfiType::Float),
+        10 => Ok(FfiType::Double),
+        11 => Ok(FfiType::Pointer),
+        12 => Ok(FfiType::String),
+        _ => Err(format!("Invalid FFI type byte: {}", byte)),
+    }
+}
 
 // Bytecode file format serialization
 
@@ -383,6 +421,36 @@ fn write_instruction(bytes: &mut Vec<u8>, instr: &Instruction) {
         // Multi-threaded HTTP (124-125)
         Instruction::HttpListenShared => bytes.push(124),
         Instruction::HttpServeParallel => bytes.push(125),
+        // FFI instructions (150-169)
+        Instruction::FfiLoadLibrary => bytes.push(150),
+        Instruction::FfiGetSymbol => bytes.push(151),
+        Instruction::FfiCall(ref arg_types, ref return_type) => {
+            bytes.push(152);
+            write_u32(bytes, arg_types.len() as u32);
+            for arg_type in arg_types {
+                bytes.push(ffi_type_to_byte(arg_type));
+            }
+            bytes.push(ffi_type_to_byte(return_type));
+        }
+        Instruction::FfiPointerToString => bytes.push(153),
+        Instruction::FfiStringToPointer => bytes.push(154),
+        Instruction::FfiFreeString => bytes.push(155),
+        Instruction::FfiNullPointer => bytes.push(156),
+        Instruction::FfiPointerNull => bytes.push(157),
+        Instruction::IsPointer => bytes.push(158),
+        Instruction::FfiPointerAdd => bytes.push(159),
+        Instruction::FfiReadInt => bytes.push(160),
+        Instruction::FfiWriteInt => bytes.push(161),
+        Instruction::FfiReadFloat => bytes.push(162),
+        Instruction::FfiWriteFloat => bytes.push(163),
+        Instruction::FfiReadByte => bytes.push(164),
+        Instruction::FfiWriteByte => bytes.push(165),
+        Instruction::FfiAllocate => bytes.push(166),
+        Instruction::FfiFree => bytes.push(167),
+        Instruction::FfiSizeOf(ref ffi_type) => {
+            bytes.push(168);
+            bytes.push(ffi_type_to_byte(ffi_type));
+        }
     }
 }
 
@@ -586,6 +654,49 @@ fn read_instruction(bytes: &[u8], pos: &mut usize) -> Result<Instruction, String
         129 => Ok(Instruction::StringUpcase),
         130 => Ok(Instruction::StringDowncase),
         131 => Ok(Instruction::Format),
+        // FFI instructions (150-169)
+        150 => Ok(Instruction::FfiLoadLibrary),
+        151 => Ok(Instruction::FfiGetSymbol),
+        152 => {
+            let arg_count = read_u32(bytes, pos)? as usize;
+            let mut arg_types = Vec::with_capacity(arg_count);
+            for _ in 0..arg_count {
+                if *pos >= bytes.len() {
+                    return Err("Unexpected end of bytecode reading FFI arg types".to_string());
+                }
+                arg_types.push(byte_to_ffi_type(bytes[*pos])?);
+                *pos += 1;
+            }
+            if *pos >= bytes.len() {
+                return Err("Unexpected end of bytecode reading FFI return type".to_string());
+            }
+            let return_type = byte_to_ffi_type(bytes[*pos])?;
+            *pos += 1;
+            Ok(Instruction::FfiCall(arg_types, return_type))
+        }
+        153 => Ok(Instruction::FfiPointerToString),
+        154 => Ok(Instruction::FfiStringToPointer),
+        155 => Ok(Instruction::FfiFreeString),
+        156 => Ok(Instruction::FfiNullPointer),
+        157 => Ok(Instruction::FfiPointerNull),
+        158 => Ok(Instruction::IsPointer),
+        159 => Ok(Instruction::FfiPointerAdd),
+        160 => Ok(Instruction::FfiReadInt),
+        161 => Ok(Instruction::FfiWriteInt),
+        162 => Ok(Instruction::FfiReadFloat),
+        163 => Ok(Instruction::FfiWriteFloat),
+        164 => Ok(Instruction::FfiReadByte),
+        165 => Ok(Instruction::FfiWriteByte),
+        166 => Ok(Instruction::FfiAllocate),
+        167 => Ok(Instruction::FfiFree),
+        168 => {
+            if *pos >= bytes.len() {
+                return Err("Unexpected end of bytecode reading FFI type for sizeof".to_string());
+            }
+            let ffi_type = byte_to_ffi_type(bytes[*pos])?;
+            *pos += 1;
+            Ok(Instruction::FfiSizeOf(ffi_type))
+        }
         _ => Err(format!("Unknown opcode: {}", opcode)),
     }
 }
@@ -677,6 +788,10 @@ fn write_value(bytes: &mut Vec<u8>, value: &Value) {
         }
         Value::SharedTcpListener(_) => {
             panic!("Cannot serialize SharedTcpListener to bytecode - runtime value only");
+        }
+        Value::Pointer(p) => {
+            bytes.push(10);  // Tag 10 for Pointer
+            bytes.extend_from_slice(&p.to_le_bytes());
         }
     }
 }
@@ -793,6 +908,24 @@ fn read_value(bytes: &[u8], pos: &mut usize) -> Result<Value, String> {
             ]);
             *pos += 8;
             Ok(Value::Float(f))
+        }
+        10 => {
+            // Read Pointer
+            if *pos + 8 > bytes.len() {
+                return Err("Unexpected end of bytecode".to_string());
+            }
+            let p = i64::from_le_bytes([
+                bytes[*pos],
+                bytes[*pos + 1],
+                bytes[*pos + 2],
+                bytes[*pos + 3],
+                bytes[*pos + 4],
+                bytes[*pos + 5],
+                bytes[*pos + 6],
+                bytes[*pos + 7],
+            ]);
+            *pos += 8;
+            Ok(Value::Pointer(p))
         }
         _ => Err(format!("Unknown value tag: {}", tag)),
     }

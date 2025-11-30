@@ -5,9 +5,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::value::{Value, List, ClosureData};
-use super::instructions::Instruction;
+use super::instructions::{Instruction, FfiType};
 use super::stack::Frame;
 use super::errors::RuntimeError;
+use super::ffi::{FfiState, ffi_type_size};
 use crate::parser::Parser;
 use crate::compiler::Compiler;
 
@@ -23,6 +24,7 @@ pub struct VM {
     pub loaded_modules: HashSet<String>,     // Track loaded modules for require
     pub loading_modules: Vec<String>,        // Stack of modules currently being loaded (for circular dep detection)
     pub module_exports: HashMap<String, HashSet<String>>, // Module name -> exported symbols
+    pub ffi_state: FfiState,                 // FFI state for foreign function interface
 }
 
 impl VM {
@@ -40,6 +42,7 @@ impl VM {
             loaded_modules: HashSet::new(),
             loading_modules: Vec::new(),
             module_exports: HashMap::new(),
+            ffi_state: FfiState::new(),
         };
         vm.register_builtins();
         vm
@@ -195,6 +198,25 @@ impl VM {
         // Multi-threaded HTTP (Phase 14b)
         self.functions.insert("http-listen-shared".to_string(), vec![LoadArg(0), HttpListenShared, Ret]);
         self.functions.insert("http-serve-parallel".to_string(), vec![LoadArg(0), LoadArg(1), LoadArg(2), LoadArg(3), HttpServeParallel, Ret]);
+
+        // FFI (Foreign Function Interface) - Phase 21
+        self.functions.insert("ffi-load".to_string(), vec![LoadArg(0), FfiLoadLibrary, Ret]);
+        self.functions.insert("ffi-symbol".to_string(), vec![LoadArg(0), LoadArg(1), FfiGetSymbol, Ret]);
+        self.functions.insert("ffi-pointer->string".to_string(), vec![LoadArg(0), FfiPointerToString, Ret]);
+        self.functions.insert("ffi-string->pointer".to_string(), vec![LoadArg(0), FfiStringToPointer, Ret]);
+        self.functions.insert("ffi-free-string".to_string(), vec![LoadArg(0), FfiFreeString, Ret]);
+        self.functions.insert("ffi-null".to_string(), vec![FfiNullPointer, Ret]);
+        self.functions.insert("ffi-null?".to_string(), vec![LoadArg(0), FfiPointerNull, Ret]);
+        self.functions.insert("pointer?".to_string(), vec![LoadArg(0), IsPointer, Ret]);
+        self.functions.insert("ffi-pointer+".to_string(), vec![LoadArg(0), LoadArg(1), FfiPointerAdd, Ret]);
+        self.functions.insert("ffi-read-int".to_string(), vec![LoadArg(0), FfiReadInt, Ret]);
+        self.functions.insert("ffi-write-int".to_string(), vec![LoadArg(0), LoadArg(1), FfiWriteInt, Ret]);
+        self.functions.insert("ffi-read-float".to_string(), vec![LoadArg(0), FfiReadFloat, Ret]);
+        self.functions.insert("ffi-write-float".to_string(), vec![LoadArg(0), LoadArg(1), FfiWriteFloat, Ret]);
+        self.functions.insert("ffi-read-byte".to_string(), vec![LoadArg(0), FfiReadByte, Ret]);
+        self.functions.insert("ffi-write-byte".to_string(), vec![LoadArg(0), LoadArg(1), FfiWriteByte, Ret]);
+        self.functions.insert("ffi-allocate".to_string(), vec![LoadArg(0), FfiAllocate, Ret]);
+        self.functions.insert("ffi-free".to_string(), vec![LoadArg(0), FfiFree, Ret]);
     }
 
     pub fn execute_one_instruction(&mut self) -> Result<(), RuntimeError> {
@@ -2835,6 +2857,7 @@ impl VM {
                     Value::TcpListener(_) => "tcp-listener",
                     Value::TcpStream(_) => "tcp-stream",
                     Value::SharedTcpListener(_) => "shared-tcp-listener",
+                    Value::Pointer(_) => "pointer",
                 };
                 self.value_stack.push(Value::Symbol(Arc::new(type_symbol.to_string())));
                 self.instruction_pointer += 1;
@@ -3639,6 +3662,442 @@ impl VM {
                 self.value_stack.push(Value::Integer(total as i64));
                 self.instruction_pointer += 1;
             }
+
+            // FFI Instructions - Phase 21
+            Instruction::FfiLoadLibrary => {
+                let path_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiLoadLibrary".to_string()))?;
+                match path_val {
+                    Value::String(path) => {
+                        match self.ffi_state.load_library(&path) {
+                            Ok(handle) => {
+                                self.value_stack.push(Value::Integer(handle));
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::new(format!("ffi-load: {}", e)));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: ffi-load expects string path, got {}",
+                            Self::type_name(&path_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiGetSymbol => {
+                let name_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiGetSymbol".to_string()))?;
+                let handle_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiGetSymbol".to_string()))?;
+
+                let handle = match handle_val {
+                    Value::Integer(h) => h,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-symbol expects integer handle, got {}",
+                        Self::type_name(&handle_val)
+                    ))),
+                };
+
+                let name = match &name_val {
+                    Value::String(s) => &**s,
+                    Value::Symbol(s) => &**s,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-symbol expects string or symbol name, got {}",
+                        Self::type_name(&name_val)
+                    ))),
+                };
+
+                match self.ffi_state.get_symbol(handle, name) {
+                    Ok(ptr) => {
+                        self.value_stack.push(Value::Pointer(ptr));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-symbol: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiCall(ref arg_types, ref return_type) => {
+                let arg_types = arg_types.clone();
+                let return_type = return_type.clone();
+                let arg_count = arg_types.len();
+
+                // Pop arguments in reverse order
+                let mut args = Vec::with_capacity(arg_count);
+                for _ in 0..arg_count {
+                    let arg = self.value_stack.pop()
+                        .ok_or_else(|| RuntimeError::new("Stack underflow in FfiCall".to_string()))?;
+                    args.push(arg);
+                }
+                args.reverse();
+
+                // Pop function pointer
+                let func_ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiCall".to_string()))?;
+
+                let func_ptr = match func_ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p, // Allow integer as function pointer
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-call expects pointer, got {}",
+                        Self::type_name(&func_ptr_val)
+                    ))),
+                };
+
+                let result = self.ffi_state.call_function(func_ptr, args, &arg_types, &return_type)?;
+                self.value_stack.push(result);
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiPointerToString => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiPointerToString".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-pointer->string expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                match self.ffi_state.pointer_to_string(ptr) {
+                    Ok(s) => {
+                        self.value_stack.push(Value::String(Arc::new(s)));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-pointer->string: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiStringToPointer => {
+                let str_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiStringToPointer".to_string()))?;
+
+                match str_val {
+                    Value::String(s) => {
+                        match self.ffi_state.allocate_string(&s) {
+                            Ok(ptr) => {
+                                self.value_stack.push(Value::Pointer(ptr));
+                            }
+                            Err(e) => {
+                                return Err(RuntimeError::new(format!("ffi-string->pointer: {}", e)));
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(RuntimeError::new(format!(
+                            "Type error: ffi-string->pointer expects string, got {}",
+                            Self::type_name(&str_val)
+                        )));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiFreeString => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiFreeString".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-free-string expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let success = self.ffi_state.free_string(ptr);
+                self.value_stack.push(Value::Boolean(success));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiNullPointer => {
+                self.value_stack.push(Value::Pointer(0));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiPointerNull => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiPointerNull".to_string()))?;
+
+                let is_null = match ptr_val {
+                    Value::Pointer(p) => p == 0,
+                    Value::Integer(p) => p == 0,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-null? expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                self.value_stack.push(Value::Boolean(is_null));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::IsPointer => {
+                let val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in IsPointer".to_string()))?;
+                self.value_stack.push(Value::Boolean(matches!(val, Value::Pointer(_))));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiPointerAdd => {
+                let offset_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiPointerAdd".to_string()))?;
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiPointerAdd".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-pointer+ expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let offset = match offset_val {
+                    Value::Integer(n) => n,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-pointer+ expects integer offset, got {}",
+                        Self::type_name(&offset_val)
+                    ))),
+                };
+
+                self.value_stack.push(Value::Pointer(ptr + offset));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiReadInt => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiReadInt".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-read-int expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                match self.ffi_state.read_int(ptr) {
+                    Ok(v) => {
+                        self.value_stack.push(Value::Integer(v));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-read-int: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiWriteInt => {
+                let value_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteInt".to_string()))?;
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteInt".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-int expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let value = match value_val {
+                    Value::Integer(n) => n,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-int expects integer value, got {}",
+                        Self::type_name(&value_val)
+                    ))),
+                };
+
+                match self.ffi_state.write_int(ptr, value) {
+                    Ok(()) => {
+                        self.value_stack.push(Value::Boolean(true));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-write-int: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiReadFloat => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiReadFloat".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-read-float expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                match self.ffi_state.read_float(ptr) {
+                    Ok(v) => {
+                        self.value_stack.push(Value::Float(v));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-read-float: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiWriteFloat => {
+                let value_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteFloat".to_string()))?;
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteFloat".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-float expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let value = match value_val {
+                    Value::Float(f) => f,
+                    Value::Integer(n) => n as f64,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-float expects float value, got {}",
+                        Self::type_name(&value_val)
+                    ))),
+                };
+
+                match self.ffi_state.write_float(ptr, value) {
+                    Ok(()) => {
+                        self.value_stack.push(Value::Boolean(true));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-write-float: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiReadByte => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiReadByte".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-read-byte expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                match self.ffi_state.read_byte(ptr) {
+                    Ok(v) => {
+                        self.value_stack.push(Value::Integer(v as i64));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-read-byte: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiWriteByte => {
+                let value_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteByte".to_string()))?;
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiWriteByte".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-byte expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let value = match value_val {
+                    Value::Integer(n) if n >= 0 && n <= 255 => n as u8,
+                    Value::Integer(n) => return Err(RuntimeError::new(format!(
+                        "ffi-write-byte: value {} out of range (0-255)", n
+                    ))),
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-write-byte expects integer value (0-255), got {}",
+                        Self::type_name(&value_val)
+                    ))),
+                };
+
+                match self.ffi_state.write_byte(ptr, value) {
+                    Ok(()) => {
+                        self.value_stack.push(Value::Boolean(true));
+                    }
+                    Err(e) => {
+                        return Err(RuntimeError::new(format!("ffi-write-byte: {}", e)));
+                    }
+                }
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiAllocate => {
+                let size_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiAllocate".to_string()))?;
+
+                let size = match size_val {
+                    Value::Integer(n) if n > 0 => n as usize,
+                    Value::Integer(n) => return Err(RuntimeError::new(format!(
+                        "ffi-allocate: size must be positive, got {}", n
+                    ))),
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-allocate expects integer size, got {}",
+                        Self::type_name(&size_val)
+                    ))),
+                };
+
+                let ptr = self.ffi_state.allocate(size);
+                self.value_stack.push(Value::Pointer(ptr));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiFree => {
+                let ptr_val = self.value_stack.pop()
+                    .ok_or_else(|| RuntimeError::new("Stack underflow in FfiFree".to_string()))?;
+
+                let ptr = match ptr_val {
+                    Value::Pointer(p) => p,
+                    Value::Integer(p) => p,
+                    _ => return Err(RuntimeError::new(format!(
+                        "Type error: ffi-free expects pointer, got {}",
+                        Self::type_name(&ptr_val)
+                    ))),
+                };
+
+                let success = self.ffi_state.free(ptr);
+                self.value_stack.push(Value::Boolean(success));
+                self.instruction_pointer += 1;
+            }
+
+            Instruction::FfiSizeOf(ref ffi_type) => {
+                let size = ffi_type_size(ffi_type);
+                self.value_stack.push(Value::Integer(size as i64));
+                self.instruction_pointer += 1;
+            }
         }
 
         Ok(())
@@ -3659,6 +4118,7 @@ impl VM {
             Value::TcpListener(_) => "tcp-listener",
             Value::TcpStream(_) => "tcp-stream",
             Value::SharedTcpListener(_) => "shared-tcp-listener",
+            Value::Pointer(_) => "pointer",
         }
     }
 
@@ -3704,6 +4164,7 @@ impl VM {
             Value::TcpListener(_) => "<tcp-listener>".to_string(),
             Value::TcpStream(_) => "<tcp-stream>".to_string(),
             Value::SharedTcpListener(_) => "<shared-tcp-listener>".to_string(),
+            Value::Pointer(p) => format!("<pointer 0x{:x}>", p),
         }
     }
 
@@ -3749,6 +4210,7 @@ impl VM {
             Value::TcpListener(_) => "<tcp-listener>".to_string(),
             Value::TcpStream(_) => "<tcp-stream>".to_string(),
             Value::SharedTcpListener(_) => "<shared-tcp-listener>".to_string(),
+            Value::Pointer(p) => format!("<pointer 0x{:x}>", p),
         }
     }
 

@@ -206,6 +206,28 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::StringUpcase => "StringUpcase".to_string(),
         Instruction::StringDowncase => "StringDowncase".to_string(),
         Instruction::Format => "Format".to_string(),
+        // FFI instructions
+        Instruction::FfiLoadLibrary => "FfiLoadLibrary".to_string(),
+        Instruction::FfiGetSymbol => "FfiGetSymbol".to_string(),
+        Instruction::FfiCall(ref arg_types, ref return_type) => {
+            format!("FfiCall({:?}, {:?})", arg_types, return_type)
+        }
+        Instruction::FfiPointerToString => "FfiPointerToString".to_string(),
+        Instruction::FfiStringToPointer => "FfiStringToPointer".to_string(),
+        Instruction::FfiFreeString => "FfiFreeString".to_string(),
+        Instruction::FfiNullPointer => "FfiNullPointer".to_string(),
+        Instruction::FfiPointerNull => "FfiPointerNull".to_string(),
+        Instruction::IsPointer => "IsPointer".to_string(),
+        Instruction::FfiPointerAdd => "FfiPointerAdd".to_string(),
+        Instruction::FfiReadInt => "FfiReadInt".to_string(),
+        Instruction::FfiWriteInt => "FfiWriteInt".to_string(),
+        Instruction::FfiReadFloat => "FfiReadFloat".to_string(),
+        Instruction::FfiWriteFloat => "FfiWriteFloat".to_string(),
+        Instruction::FfiReadByte => "FfiReadByte".to_string(),
+        Instruction::FfiWriteByte => "FfiWriteByte".to_string(),
+        Instruction::FfiAllocate => "FfiAllocate".to_string(),
+        Instruction::FfiFree => "FfiFree".to_string(),
+        Instruction::FfiSizeOf(ref ffi_type) => format!("FfiSizeOf({:?})", ffi_type),
     }
 }
 

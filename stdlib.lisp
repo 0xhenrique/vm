@@ -137,6 +137,15 @@
 (defun compose (f g)
   (lambda (x) (f (g x))))
 
+;; partial: Partially apply function with first argument
+;; (partial add 5) returns a function that adds 5 to its argument
+(defun partial (f arg)
+  (lambda (x) (f arg x)))
+
+;; partial2: Partially apply function with two arguments
+(defun partial2 (f arg1 arg2)
+  (lambda (x) (f arg1 arg2 x)))
+
 ;; identity: Identity function
 (defun identity (x) x)
 
@@ -257,6 +266,28 @@
   (if (string-empty? s)
       ""
       (substring s 1 (string-length s))))
+
+;; string-blank?: Check if string is empty or only whitespace
+(defun string-blank? (s)
+  (string-empty? (string-trim s)))
+
+;; string-repeat: Repeat a string n times
+(defun string-repeat-helper (s n acc)
+  (if (<= n 0)
+      acc
+      (string-repeat-helper s (- n 1) (string-append acc s))))
+
+(defun string-repeat (s n)
+  (string-repeat-helper s n ""))
+
+;; string-reverse: Reverse a string
+(defun string-reverse-helper (chars acc)
+  (if (null? chars)
+      acc
+      (string-reverse-helper (cdr chars) (string-append (car chars) acc))))
+
+(defun string-reverse (s)
+  (string-reverse-helper (string->list s) ""))
 
 ;; ------------------------------------------------------------
 ;; Error Handling - Errors as Values (Rust/Go style)
