@@ -467,3 +467,122 @@ fn test_multi_arity_wildcard() {
     let result = compile_and_run(source).unwrap();
     assert_eq!(result.trim(), "\"two args\"");
 }
+
+// ==================== Deeply Nested Pattern Matching Tests ====================
+
+#[test]
+fn test_nested_double_cons() {
+    let source = r#"
+        (defun extract-first-of-first
+          ((((x . _) . _)) x))
+        (extract-first-of-first '((1 2) 3))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "1");
+}
+
+#[test]
+fn test_nested_triple_cons() {
+    let source = r#"
+        (defun extract-triple-nested
+          (((((x . _) . _) . _)) x))
+        (extract-triple-nested '(((1 2) 3) 4))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "1");
+}
+
+#[test]
+fn test_nested_list_multiple_vars() {
+    let source = r#"
+        (defun extract-both
+          (((x y)) (cons x (cons y '()))))
+        (extract-both '(1 2))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "(1 2)");
+}
+
+#[test]
+fn test_nested_with_wildcards() {
+    let source = r#"
+        (defun third-level
+          (((((_ _ x . _) . _) . _)) x))
+        (third-level '(((1 2 3 4) 5) 6))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "3");
+}
+
+#[test]
+fn test_nested_literal_matching() {
+    let source = r#"
+        (defun nested-literal
+          (((0 x)) (* x 2))
+          (((x 0)) (* x 3))
+          (((x y)) (+ x y)))
+        (nested-literal '(0 5))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "10");
+}
+
+#[test]
+fn test_nested_literal_second_clause() {
+    let source = r#"
+        (defun nested-literal
+          (((0 x)) (* x 2))
+          (((x 0)) (* x 3))
+          (((x y)) (+ x y)))
+        (nested-literal '(5 0))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "15");
+}
+
+#[test]
+fn test_nested_tail_extraction() {
+    let source = r#"
+        (defun get-nested-tail
+          (((h . t)) t))
+        (get-nested-tail '(1 2 3))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "(2 3)");
+}
+
+#[test]
+fn test_complex_nested_structure() {
+    let source = r#"
+        (defun complex-pattern
+          ((((a b) (c d))) (+ (+ a b) (+ c d))))
+        (complex-pattern '((1 2) (3 4)))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "10");
+}
+
+#[test]
+fn test_deeply_nested_with_multiple_clauses() {
+    let source = r#"
+        (defun process-nested
+          ((('empty)) 'got-empty)
+          (((x)) x)
+          (((x y)) (+ x y)))
+        (process-nested '(42))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "42");
+}
+
+#[test]
+fn test_deeply_nested_recursion() {
+    let source = r#"
+        (defun sum-first-elements
+          (('()) 0)
+          ((((x) . rest)) (+ x (sum-first-elements rest))))
+        (sum-first-elements '((1) (2) (3)))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "6");
+}

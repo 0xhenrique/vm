@@ -1905,9 +1905,21 @@ impl Compiler {
             Pattern::Wildcard | Pattern::Literal(_) | Pattern::QuotedSymbol(_) | Pattern::EmptyList => {
                 // No binding needed
             }
-            Pattern::List(_) | Pattern::DottedList(_, _) => {
-                // Nested patterns within lists - would need recursive handling
-                // For now, just skip (no bindings)
+            Pattern::List(sub_patterns) => {
+                // Nested list pattern - recursively bind variables
+                // For each sub-pattern in the nested list, we need to bind its variables
+                for (sub_elem_idx, sub_pattern) in sub_patterns.iter().enumerate() {
+                    self.bind_deeply_nested_pattern_variable(sub_pattern, arg_idx, elem_idx, sub_elem_idx)?;
+                }
+            }
+            Pattern::DottedList(head_patterns, tail_pattern) => {
+                // Nested dotted list pattern - recursively bind variables
+                // Bind head pattern variables
+                for (sub_elem_idx, sub_pattern) in head_patterns.iter().enumerate() {
+                    self.bind_deeply_nested_pattern_variable(sub_pattern, arg_idx, elem_idx, sub_elem_idx)?;
+                }
+                // Bind tail pattern variable
+                self.bind_deeply_nested_tail_pattern_variable(tail_pattern, arg_idx, elem_idx, head_patterns.len())?;
             }
         }
         Ok(())
@@ -1929,8 +1941,217 @@ impl Compiler {
             Pattern::Wildcard | Pattern::EmptyList => {
                 // No binding needed
             }
+            Pattern::List(sub_patterns) => {
+                // Nested list pattern as tail - recursively bind variables
+                // For each sub-pattern, emit full navigation path
+                for (sub_elem_idx, sub_pattern) in sub_patterns.iter().enumerate() {
+                    match sub_pattern {
+                        Pattern::Variable(name) => {
+                            self.emit(Instruction::LoadArg(arg_idx));
+                            for _ in 0..skip_count {
+                                self.emit(Instruction::Cdr);
+                            }
+                            // Navigate to element in nested list
+                            for _ in 0..sub_elem_idx {
+                                self.emit(Instruction::Cdr);
+                            }
+                            self.emit(Instruction::Car);
+                            let stack_pos = self.stack_depth;
+                            self.stack_depth += 1;
+                            self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+                        }
+                        _ => {
+                            // More complex nested patterns - skip for now
+                        }
+                    }
+                }
+            }
+            Pattern::DottedList(head_patterns, tail_pattern) => {
+                // Nested dotted list pattern as tail - recursively bind variables
+                // Bind head patterns
+                for (sub_elem_idx, sub_pattern) in head_patterns.iter().enumerate() {
+                    match sub_pattern {
+                        Pattern::Variable(name) => {
+                            self.emit(Instruction::LoadArg(arg_idx));
+                            for _ in 0..skip_count {
+                                self.emit(Instruction::Cdr);
+                            }
+                            // Navigate to element in nested list
+                            for _ in 0..sub_elem_idx {
+                                self.emit(Instruction::Cdr);
+                            }
+                            self.emit(Instruction::Car);
+                            let stack_pos = self.stack_depth;
+                            self.stack_depth += 1;
+                            self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+                        }
+                        _ => {
+                            // More complex nested patterns - skip for now
+                        }
+                    }
+                }
+
+                // Bind tail pattern
+                match tail_pattern.as_ref() {
+                    Pattern::Variable(name) => {
+                        self.emit(Instruction::LoadArg(arg_idx));
+                        for _ in 0..skip_count {
+                            self.emit(Instruction::Cdr);
+                        }
+                        // Skip head elements
+                        for _ in 0..head_patterns.len() {
+                            self.emit(Instruction::Cdr);
+                        }
+                        let stack_pos = self.stack_depth;
+                        self.stack_depth += 1;
+                        self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+                    }
+                    _ => {
+                        // Complex tail patterns - skip for now
+                    }
+                }
+            }
             _ => {
-                // Other patterns as tail - complex case, skip for now
+                // Other patterns as tail - literals, quoted symbols
+                // No binding needed
+            }
+        }
+        Ok(())
+    }
+
+    // Bind a deeply nested pattern variable (pattern inside a pattern inside a list element)
+    // Example: for ((((x . _) . _)) ...), we need to navigate multiple levels deep
+    fn bind_deeply_nested_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize, sub_elem_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument, navigate to outer element, then to inner element
+                self.emit(Instruction::LoadArg(arg_idx));
+                // Navigate to outer element
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Navigate to inner element
+                for _ in 0..sub_elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::QuotedSymbol(_) | Pattern::EmptyList => {
+                // No binding needed
+            }
+            Pattern::List(sub_patterns) => {
+                // Even more deeply nested - need to go another level
+                for (sub_sub_elem_idx, sub_pattern) in sub_patterns.iter().enumerate() {
+                    self.bind_triple_nested_pattern_variable(sub_pattern, arg_idx, elem_idx, sub_elem_idx, sub_sub_elem_idx)?;
+                }
+            }
+            Pattern::DottedList(head_patterns, tail_pattern) => {
+                // Even more deeply nested dotted list
+                for (sub_sub_elem_idx, sub_pattern) in head_patterns.iter().enumerate() {
+                    self.bind_triple_nested_pattern_variable(sub_pattern, arg_idx, elem_idx, sub_elem_idx, sub_sub_elem_idx)?;
+                }
+                self.bind_triple_nested_tail_pattern_variable(tail_pattern, arg_idx, elem_idx, sub_elem_idx, head_patterns.len())?;
+            }
+        }
+        Ok(())
+    }
+
+    // Bind the tail of a deeply nested dotted list pattern
+    fn bind_deeply_nested_tail_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize, skip_count: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument, navigate to outer element, then skip inner elements
+                self.emit(Instruction::LoadArg(arg_idx));
+                // Navigate to outer element
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Skip inner elements
+                for _ in 0..skip_count {
+                    self.emit(Instruction::Cdr);
+                }
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::EmptyList => {
+                // No binding needed
+            }
+            _ => {
+                // Complex nested tail patterns - would need even more recursion
+                // Skip for now
+            }
+        }
+        Ok(())
+    }
+
+    // Bind a triple nested pattern variable (for very deep nesting)
+    fn bind_triple_nested_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize, sub_elem_idx: usize, sub_sub_elem_idx: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument and navigate through three levels
+                self.emit(Instruction::LoadArg(arg_idx));
+                // Navigate to first level
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Navigate to second level
+                for _ in 0..sub_elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Navigate to third level
+                for _ in 0..sub_sub_elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            Pattern::Wildcard | Pattern::Literal(_) | Pattern::QuotedSymbol(_) | Pattern::EmptyList => {
+                // No binding needed
+            }
+            _ => {
+                // Even deeper nesting - we'll stop here for practical purposes
+                // Most real-world code won't need more than 3 levels of nesting
+            }
+        }
+        Ok(())
+    }
+
+    // Bind the tail of a triple nested dotted list pattern
+    fn bind_triple_nested_tail_pattern_variable(&mut self, pattern: &Pattern, arg_idx: usize, elem_idx: usize, sub_elem_idx: usize, skip_count: usize) -> Result<(), CompileError> {
+        match pattern {
+            Pattern::Variable(name) => {
+                // Load the argument and navigate through levels, then skip
+                self.emit(Instruction::LoadArg(arg_idx));
+                // Navigate to first level
+                for _ in 0..elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Navigate to second level
+                for _ in 0..sub_elem_idx {
+                    self.emit(Instruction::Cdr);
+                }
+                self.emit(Instruction::Car);
+                // Skip elements at third level
+                for _ in 0..skip_count {
+                    self.emit(Instruction::Cdr);
+                }
+                let stack_pos = self.stack_depth;
+                self.stack_depth += 1;
+                self.local_bindings.insert(name.clone(), ValueLocation::Local(stack_pos));
+            }
+            _ => {
+                // No binding needed for other patterns
             }
         }
         Ok(())
