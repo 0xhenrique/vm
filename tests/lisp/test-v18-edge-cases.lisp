@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Requires pattern matching and destructuring in function parameters (Phase 8)
 ; Test v18 edge cases and corner cases
 
 (print "=== Testing v18 Edge Cases ===")
