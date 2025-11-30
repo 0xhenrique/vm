@@ -291,25 +291,37 @@ impl VM {
                 match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         if *y == 0 {
-                            return Err(RuntimeError::new("Division by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Division by zero".to_string(),
+                                "Check your divisor before dividing. You can use an if-expression to handle zero cases: (if (== y 0) 0 (/ x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Integer(x / y));
                     }
                     (Value::Float(x), Value::Float(y)) => {
                         if *y == 0.0 {
-                            return Err(RuntimeError::new("Division by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Division by zero".to_string(),
+                                "Check your divisor before dividing. You can use an if-expression to handle zero cases: (if (== y 0) 0.0 (/ x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float(x / y));
                     }
                     (Value::Integer(x), Value::Float(y)) => {
                         if *y == 0.0 {
-                            return Err(RuntimeError::new("Division by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Division by zero".to_string(),
+                                "Check your divisor before dividing. You can use an if-expression to handle zero cases: (if (== y 0.0) 0.0 (/ x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float(*x as f64 / y));
                     }
                     (Value::Float(x), Value::Integer(y)) => {
                         if *y == 0 {
-                            return Err(RuntimeError::new("Division by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Division by zero".to_string(),
+                                "Check your divisor before dividing. You can use an if-expression to handle zero cases: (if (== y 0) 0.0 (/ x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float(x / *y as f64));
                     }
@@ -329,25 +341,37 @@ impl VM {
                 match (&a, &b) {
                     (Value::Integer(x), Value::Integer(y)) => {
                         if *y == 0 {
-                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Modulo by zero".to_string(),
+                                "Check your divisor before using modulo. You can use an if-expression: (if (== y 0) 0 (% x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Integer(x % y));
                     }
                     (Value::Float(x), Value::Float(y)) => {
                         if *y == 0.0 {
-                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Modulo by zero".to_string(),
+                                "Check your divisor before using modulo. You can use an if-expression: (if (== y 0.0) 0.0 (% x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float(x % y));
                     }
                     (Value::Integer(x), Value::Float(y)) => {
                         if *y == 0.0 {
-                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Modulo by zero".to_string(),
+                                "Check your divisor before using modulo. You can use an if-expression: (if (== y 0.0) 0.0 (% x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float((*x as f64) % y));
                     }
                     (Value::Float(x), Value::Integer(y)) => {
                         if *y == 0 {
-                            return Err(RuntimeError::new("Modulo by zero".to_string()));
+                            return Err(RuntimeError::with_suggestion(
+                                "Modulo by zero".to_string(),
+                                "Check your divisor before using modulo. You can use an if-expression: (if (== y 0) 0.0 (% x y))".to_string(),
+                            ));
                         }
                         self.value_stack.push(Value::Float(x % (*y as f64)));
                     }
