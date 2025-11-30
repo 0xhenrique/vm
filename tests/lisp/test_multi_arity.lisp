@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Clause 2 has 2 patterns, but clause 1 has 1 patterns. All clauses must have the same arity.
 (defun add
   ((x) x)
   ((x y) (+ x y))
