@@ -205,6 +205,7 @@ fn format_instruction(instr: &Instruction) -> String {
         Instruction::StringContains => "StringContains".to_string(),
         Instruction::StringUpcase => "StringUpcase".to_string(),
         Instruction::StringDowncase => "StringDowncase".to_string(),
+        Instruction::Format => "Format".to_string(),
     }
 }
 
