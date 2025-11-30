@@ -300,3 +300,55 @@ fn test_vm_stack_trace() {
     vm.execute_one_instruction(); // Call inner
     assert_eq!(vm.get_stack_trace(), vec!["outer", "inner"]);
 }
+
+#[test]
+fn test_vm_full_stack_trace_on_error() {
+    let mut vm = VM::new();
+
+    // Innermost function that causes division by zero
+    let level3_fn = vec![
+        Instruction::Push(Value::Integer(42)),
+        Instruction::Push(Value::Integer(0)),
+        Instruction::Div,  // Division by zero error
+        Instruction::Ret,
+    ];
+
+    // Middle function
+    let level2_fn = vec![
+        Instruction::Call("level3".to_string(), 0),
+        Instruction::Push(Value::Integer(1)),
+        Instruction::Add,  // Prevent tail call optimization
+        Instruction::Ret,
+    ];
+
+    // Outermost function
+    let level1_fn = vec![
+        Instruction::Call("level2".to_string(), 0),
+        Instruction::Push(Value::Integer(2)),
+        Instruction::Add,  // Prevent tail call optimization
+        Instruction::Ret,
+    ];
+
+    vm.functions.insert("level3".to_string(), level3_fn);
+    vm.functions.insert("level2".to_string(), level2_fn);
+    vm.functions.insert("level1".to_string(), level1_fn);
+
+    vm.current_bytecode = vec![
+        Instruction::Call("level1".to_string(), 0),
+        Instruction::Halt,
+    ];
+
+    // Run and expect error with full stack trace
+    let result = vm.run();
+    assert!(result.is_err());
+
+    let error = result.unwrap_err();
+    assert_eq!(error.message, "Division by zero");
+
+    // Verify full stack trace is captured
+    // Stack trace is from oldest to newest call
+    assert_eq!(error.call_stack.len(), 3);
+    assert_eq!(error.call_stack[0], "level1");
+    assert_eq!(error.call_stack[1], "level2");
+    assert_eq!(error.call_stack[2], "level3");
+}

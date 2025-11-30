@@ -3606,7 +3606,14 @@ impl VM {
 
     pub fn run(&mut self) -> Result<(), RuntimeError> {
         while !self.halted {
-            self.execute_one_instruction()?;
+            // Execute instruction and capture stack trace on error
+            if let Err(mut error) = self.execute_one_instruction() {
+                // If the error doesn't already have a call stack, add it
+                if error.call_stack.is_empty() {
+                    error.call_stack = self.get_stack_trace();
+                }
+                return Err(error);
+            }
         }
         Ok(())
     }
