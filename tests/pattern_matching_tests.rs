@@ -348,3 +348,122 @@ fn test_pattern_float_literal() {
     let result = compile_and_run(source).unwrap();
     assert_eq!(result.trim(), "true");
 }
+
+// ==================== Multi-Arity Pattern Matching Tests ====================
+
+#[test]
+fn test_multi_arity_one_arg() {
+    let source = r#"
+        (defun add
+          ((x) x)
+          ((x y) (+ x y))
+          ((x y z) (+ x (+ y z))))
+        (add 5)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "5");
+}
+
+#[test]
+fn test_multi_arity_two_args() {
+    let source = r#"
+        (defun add
+          ((x) x)
+          ((x y) (+ x y))
+          ((x y z) (+ x (+ y z))))
+        (add 5 3)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "8");
+}
+
+#[test]
+fn test_multi_arity_three_args() {
+    let source = r#"
+        (defun add
+          ((x) x)
+          ((x y) (+ x y))
+          ((x y z) (+ x (+ y z))))
+        (add 5 3 2)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "10");
+}
+
+#[test]
+fn test_multi_arity_with_patterns() {
+    let source = r#"
+        (defun maybe-add
+          ((x 0) x)
+          ((0 y) y)
+          ((x y) (+ x y)))
+        (maybe-add 5 0)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "5");
+}
+
+#[test]
+fn test_multi_arity_with_patterns_two() {
+    let source = r#"
+        (defun maybe-add
+          ((x 0) x)
+          ((0 y) y)
+          ((x y) (+ x y)))
+        (maybe-add 0 7)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "7");
+}
+
+#[test]
+fn test_multi_arity_with_patterns_general() {
+    let source = r#"
+        (defun maybe-add
+          ((x 0) x)
+          ((0 y) y)
+          ((x y) (+ x y)))
+        (maybe-add 3 4)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "7");
+}
+
+#[test]
+fn test_multi_arity_with_symbols() {
+    let source = r#"
+        (defun greet
+          (('default) "Hello, World")
+          ((name) name))
+        (greet 'default)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "\"Hello, World\"");
+}
+
+#[test]
+fn test_multi_arity_with_lists() {
+    let source = r#"
+        (defun list-op
+          (('()) "empty")
+          (((x)) x)
+          (((x y)) (+ x y))
+          (((h . t)) h))
+        (list-op '(10 20))
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "30");
+}
+
+#[test]
+fn test_multi_arity_wildcard() {
+    let source = r#"
+        (defun complex-arity
+          ((_) "one arg")
+          ((_ _) "two args")
+          ((_ _ _) "three args"))
+        (complex-arity 1 2)
+    "#;
+    let result = compile_and_run(source).unwrap();
+    assert_eq!(result.trim(), "\"two args\"");
+}

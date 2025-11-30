@@ -1533,24 +1533,17 @@ impl Compiler {
             ));
         }
 
-        // Validate that all clauses have the same arity (for now)
-        // In the future, we could support different arities with dispatch
-        let arity = parsed_clauses[0].patterns.len();
-        for (i, clause) in parsed_clauses.iter().enumerate() {
-            if clause.patterns.len() != arity {
-                return Err(CompileError::new(
-                    format!(
-                        "Clause {} has {} patterns, but clause 1 has {} patterns. All clauses must have the same arity.",
-                        i + 1, clause.patterns.len(), arity
-                    ),
-                    clauses[i].location.clone(),
-                ));
-            }
-        }
+        // Support multi-arity functions: find the maximum arity across all clauses
+        // The function will accept up to max_arity arguments, and each clause
+        // will check if the actual argument count matches its expected arity
+        let max_arity = parsed_clauses.iter()
+            .map(|clause| clause.patterns.len())
+            .max()
+            .unwrap_or(0);
 
         // Collect variable names from all patterns to build param_names
         // For pattern matching, we use synthetic parameter names based on position
-        let param_names: Vec<String> = (0..arity).map(|i| format!("__arg{}", i)).collect();
+        let param_names: Vec<String> = (0..max_arity).map(|i| format!("__arg{}", i)).collect();
 
         // Save current compilation context
         let saved_bytecode = std::mem::take(&mut self.bytecode);
@@ -1569,12 +1562,14 @@ impl Compiler {
         // Compile pattern matching dispatch
         // Structure:
         // clause_0:
+        //   CheckArity(expected_arity_0, clause_1)  # Jump if arg count doesn't match
         //   <pattern checks for clause 0>
         //   JmpIfFalse(clause_1)
         //   <bind variables for clause 0>
         //   <body for clause 0>
         //   Ret
         // clause_1:
+        //   CheckArity(expected_arity_1, clause_2)  # Jump if arg count doesn't match
         //   <pattern checks for clause 1>
         //   JmpIfFalse(clause_2)
         //   ...
@@ -1591,16 +1586,25 @@ impl Compiler {
             self.local_bindings.clear();
             self.stack_depth = 0;
 
+            // Get the arity for this specific clause
+            let clause_arity = clause.patterns.len();
+
+            // Emit CheckArity instruction: if argument count doesn't match, jump to next clause
+            // We'll patch this jump address after we know where the next clause starts
+            let arity_check_idx = self.bytecode.len();
+            self.emit(Instruction::CheckArity(clause_arity, 0)); // placeholder jump address
+
             // Compile pattern checks for this clause
             // If any pattern fails, jump to next clause
             self.pattern_match_jumps.clear();
-            let _jump_count = self.compile_pattern_checks(&clause.patterns, arity)?;
+            let _jump_count = self.compile_pattern_checks(&clause.patterns, clause_arity)?;
 
-            // Save the jump indices to patch later
-            let jumps_to_patch: Vec<usize> = self.pattern_match_jumps.clone();
+            // Save the jump indices to patch later (both arity check and pattern checks)
+            let mut jumps_to_patch: Vec<usize> = vec![arity_check_idx];
+            jumps_to_patch.extend(self.pattern_match_jumps.clone());
 
             // All patterns matched! Bind variables from patterns
-            self.bind_pattern_variables(&clause.patterns, arity)?;
+            self.bind_pattern_variables(&clause.patterns, clause_arity)?;
 
             // Compile the body in tail position
             self.in_tail_position = true;
@@ -1828,11 +1832,12 @@ impl Compiler {
         Ok(())
     }
 
-    // Patch a JmpIfFalse instruction with the correct target address
+    // Patch a JmpIfFalse, Jmp, or CheckArity instruction with the correct target address
     fn patch_jump(&mut self, idx: usize, target: usize) {
         match &mut self.bytecode[idx] {
             Instruction::JmpIfFalse(addr) => *addr = target,
             Instruction::Jmp(addr) => *addr = target,
+            Instruction::CheckArity(_, addr) => *addr = target,
             _ => panic!("Expected jump instruction at index {}", idx),
         }
     }
