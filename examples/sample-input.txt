@@ -1,0 +1,3 @@
+Hello from the CLI example!
+This is a test file.
+Line 3.

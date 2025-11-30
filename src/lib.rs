@@ -9,7 +9,7 @@ pub mod repl;
 pub mod optimizer;
 
 // Re-export commonly used types for backward compatibility
-pub use vm::{VM, Value, Instruction, List};
+pub use vm::{VM, Value, Instruction, List, FfiType};
 pub use vm::errors::{CompileError, RuntimeError, Location};
 pub use vm::stack::Frame;
 pub use vm::bytecode;

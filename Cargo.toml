@@ -7,6 +7,10 @@ edition = "2021"
 rand = "0.8"
 chrono = "0.4"
 rayon = "1.10"
+libloading = "0.8"
+# Use system libffi to avoid build issues on some systems (Guix, NixOS, etc.)
+# Requires: libffi-dev (Debian/Ubuntu), libffi-devel (Fedora), libffi (Arch)
+libffi = { version = "3.2", features = ["system"] }
 
 [[bin]]
 name = "bytecomp"
