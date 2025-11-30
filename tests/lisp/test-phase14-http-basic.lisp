@@ -1,12 +1,8 @@
 ;; Phase 14: HTTP/Networking - Basic Tests
 ;; Tests the low-level HTTP API (http-listen, http-accept, http-read-request, http-send-response, http-close)
 ;;
-;; SKIP
-;;
-;; Note: This test is skipped because it requires external coordination
-;; (a client to connect). See examples/http_server.lisp for a working example.
-;;
-;; This file documents the expected behavior:
+;; Note: This test only tests basic listener creation, not full HTTP flow.
+;; See examples/http_server.lisp for a working example.
 
 ;; Test 1: http-listen creates a listener
 (def listener (http-listen 9999))

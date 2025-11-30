@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: Test contains runtime errors (file path issues)
 ; Test v19 file I/O operations
 
 (print "=== Testing v19 File I/O ===")
@@ -55,7 +53,7 @@
 ; ============================================================================
 
 (print "Test 5: read part of this source file")
-(def this-file "tests/test-v19-file-io.lisp")
+(def this-file "tests/lisp/test-v19-file-io.lisp")
 (def contents (read-file this-file))
 (def first-line (substring contents 0 31))
 (print first-line)

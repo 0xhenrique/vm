@@ -1,5 +1,3 @@
-;; SKIP
-;; Reason: 'read-file' failed to read 'tests/test-v18-cons-patterns.lisp': No such file or directory (os error 2)
 ; Demonstration: Simple source code processor using file I/O
 ; This shows we're on the path to self-hosting!
 
@@ -25,10 +23,10 @@
   ((str) (search-defun-helper str 0)))
 
 ; Read a Lisp source file and analyze it
-(def source-file "tests/test-v18-cons-patterns.lisp")
+(def source-file "tests/lisp/test-v18-cons-patterns.lisp")
 (def source-code (read-file source-file))
 
-(print "Analyzing file: tests/test-v18-cons-patterns.lisp")
+(print "Analyzing file: tests/lisp/test-v18-cons-patterns.lisp")
 (print (string-append "File size: " (string-append (if (> (count-chars source-code) 0) "non-empty" "empty") " file")))
 (print (string-append "Contains 'defun': " (if (contains-defun? source-code) "yes" "no")))
 (print "")
